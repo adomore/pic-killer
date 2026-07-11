@@ -95,6 +95,41 @@ pub fn parse(expr: &str) -> Result<Condition> {
     )
 }
 
+/// 多个条件的组合：`A && B`（都满足）或 `A || B`（任一满足）。不支持混用优先级。
+pub struct WhereExpr {
+    conditions: Vec<Condition>,
+    any: bool, // true=OR，false=AND
+}
+
+/// 解析组合条件表达式。含 `||` 视为 OR，否则按 `&&` 拆成 AND（单条件也走这里）。
+pub fn parse_expr(expr: &str) -> Result<WhereExpr> {
+    let (sep, any) = if expr.contains("||") {
+        ("||", true)
+    } else {
+        ("&&", false)
+    };
+    let conditions = expr
+        .split(sep)
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(parse)
+        .collect::<Result<Vec<_>>>()?;
+    if conditions.is_empty() {
+        bail!("--where 条件为空");
+    }
+    Ok(WhereExpr { conditions, any })
+}
+
+impl WhereExpr {
+    pub fn matches(&self, path: &Path) -> bool {
+        if self.any {
+            self.conditions.iter().any(|c| c.matches(path))
+        } else {
+            self.conditions.iter().all(|c| c.matches(path))
+        }
+    }
+}
+
 fn strip_prefix_ci(s: &str, prefix: &str) -> Option<String> {
     if s.len() >= prefix.len() && s[..prefix.len()].eq_ignore_ascii_case(prefix) {
         Some(s[prefix.len()..].trim().to_string())
@@ -267,5 +302,20 @@ mod tests {
         assert!(parse("").is_err());
         assert!(parse("=value").is_err());
         assert!(parse("garbage").is_err());
+    }
+
+    #[test]
+    fn combine_and_or() {
+        let and = parse_expr("no-gps && make=Canon").unwrap();
+        assert_eq!(and.conditions.len(), 2);
+        assert!(!and.any);
+
+        let or = parse_expr("no-gps || no-date").unwrap();
+        assert_eq!(or.conditions.len(), 2);
+        assert!(or.any);
+
+        // 单条件仍可用
+        let single = parse_expr("has-gps").unwrap();
+        assert_eq!(single.conditions.len(), 1);
     }
 }

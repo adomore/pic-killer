@@ -48,7 +48,7 @@ fn apply_where(
     let Some(expr) = expr else {
         return Ok(files);
     };
-    let cond = crate::whereexpr::parse(expr)?;
+    let cond = crate::whereexpr::parse_expr(expr)?;
     let total = files.len();
     let kept: Vec<_> = files.into_iter().filter(|p| cond.matches(p)).collect();
     eprintln!("筛选 --where {expr}：{}/{total} 个文件符合条件", kept.len());

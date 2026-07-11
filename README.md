@@ -95,6 +95,9 @@ pic-killer set  .\photos -r --where make=Canon --artist 张三   # 只改 Canon 
 | `名称=值` `名称!=值` | 标签值等于/不等于 |
 | `名称~值` `名称!~值` | 标签值包含/不包含 |
 
+多个条件可用 `&&`（都满足）或 `||`（任一满足）组合，例如
+`--where "no-gps && make=Canon"`、`--where "make=Canon || make=Nikon"`。
+
 会写入的子命令（`time`/`set`/`gps`/`strip`/`rotate`/`copy`/`xmp`/`iptc`/`geotag`）还支持：
 
 - `-n, --dry-run` 仅预览，不写入
