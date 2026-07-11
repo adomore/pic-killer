@@ -39,6 +39,21 @@ fn collect(target: &TargetArgs) -> Vec<std::path::PathBuf> {
     scan::collect_files(&target.paths, &ext, target.recursive)
 }
 
+/// 按 `--where` 条件筛选文件。筛选说明写到 stderr，避免污染 show 的 JSON/CSV 输出。
+fn apply_where(
+    files: Vec<std::path::PathBuf>,
+    expr: &Option<String>,
+) -> Result<Vec<std::path::PathBuf>> {
+    let Some(expr) = expr else {
+        return Ok(files);
+    };
+    let cond = crate::whereexpr::parse(expr)?;
+    let total = files.len();
+    let kept: Vec<_> = files.into_iter().filter(|p| cond.matches(p)).collect();
+    eprintln!("筛选 --where {expr}：{}/{total} 个文件符合条件", kept.len());
+    Ok(kept)
+}
+
 fn write_opts(w: &WriteArgs, preserve_fs_time: bool) -> WriteOpts {
     WriteOpts {
         dry_run: w.dry_run,
@@ -145,6 +160,7 @@ pub fn time(args: TimeArgs) -> Result<usize> {
     let mode = build_time_mode(&args)?;
     let sel = parse_time_tags(&args.tags)?;
     let files = collect(&args.target);
+    let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
         return Ok(0);
@@ -322,6 +338,7 @@ fn describe_delta(d: &Delta) -> String {
 
 pub fn show(args: ShowArgs) -> Result<usize> {
     let files = collect(&args.target);
+    let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
         return Ok(0);
@@ -608,6 +625,7 @@ pub fn rotate(args: RotateArgs) -> Result<usize> {
     };
 
     let files = collect(&args.target);
+    let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
         return Ok(0);
@@ -690,6 +708,7 @@ pub fn copy(args: CopyArgs) -> Result<usize> {
         .with_context(|| format!("读取参考照片失败：{}", args.from.display()))?;
 
     let files = collect(&args.target);
+    let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
         return Ok(0);
@@ -761,6 +780,7 @@ fn process_copy(
 
 pub fn rename(args: RenameArgs) -> Result<usize> {
     let files = collect(&args.target);
+    let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
         return Ok(0);
@@ -892,6 +912,7 @@ pub fn xmp(args: XmpArgs) -> Result<usize> {
     }
 
     let files = collect(&args.target);
+    let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
         return Ok(0);
@@ -1068,6 +1089,7 @@ pub fn iptc(args: IptcArgs) -> Result<usize> {
     }
 
     let files = collect(&args.target);
+    let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
         return Ok(0);
@@ -1209,6 +1231,7 @@ fn read_iptc_props(path: &Path) -> Vec<(String, String)> {
 
 pub fn restore(args: RestoreArgs) -> Result<usize> {
     let files = collect(&args.target);
+    let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
         return Ok(0);
@@ -1309,6 +1332,7 @@ pub fn set(args: SetArgs) -> Result<usize> {
     }
 
     let files = collect(&args.target);
+    let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
         return Ok(0);
@@ -1412,6 +1436,7 @@ fn build_set_tags(a: &SetArgs) -> Result<Vec<ExifTag>> {
 
 pub fn gps(args: GpsArgs) -> Result<usize> {
     let files = collect(&args.target);
+    let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
         return Ok(0);
@@ -1473,6 +1498,7 @@ fn process_gps(path: &Path, args: &GpsArgs, opts: &WriteOpts) -> Outcome {
 
 pub fn strip(args: StripArgs) -> Result<usize> {
     let files = collect(&args.target);
+    let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
         return Ok(0);

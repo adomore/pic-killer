@@ -68,6 +68,28 @@ cargo install --path .         # 或直接安装到 PATH
 
 - `-r, --recursive` 递归子目录（目录默认只处理一层）
 - `--ext <列表>` 指定处理的扩展名（默认 `jpg,jpeg,png,tif,tiff,webp`）
+- `--where <条件>` 按元数据筛选要处理的文件（见下）
+
+### `--where` 条件筛选
+
+任何命令都能用 `--where` 只处理满足条件的文件——例如「只给缺 GPS 的照片补定位」：
+
+```powershell
+pic-killer show .\photos -r --where no-gps          # 只列出没有 GPS 的
+pic-killer time .\photos -r --where no-date --from-name   # 只给缺拍摄时间的从文件名补
+pic-killer set  .\photos -r --where make=Canon --artist 张三   # 只改 Canon 拍的
+```
+
+支持的条件（单条件；大小写不敏感）：
+
+| 条件 | 含义 |
+|------|------|
+| `has-gps` / `no-gps` | 有/无 GPS 定位 |
+| `has-date` / `no-date` | 有/无拍摄时间 |
+| `has-xmp` / `no-xmp` | 有/无 XMP |
+| `has:名称` / `no:名称` | 某标签存在/不存在（覆盖 EXIF/XMP/IPTC） |
+| `名称=值` `名称!=值` | 标签值等于/不等于 |
+| `名称~值` `名称!~值` | 标签值包含/不包含 |
 
 会写入的子命令（`time`/`set`/`gps`/`strip`）还支持：
 

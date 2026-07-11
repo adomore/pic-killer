@@ -10,6 +10,7 @@ mod iptc;
 mod namedate;
 mod scan;
 mod timeop;
+mod whereexpr;
 mod xmp;
 
 use anyhow::Result;

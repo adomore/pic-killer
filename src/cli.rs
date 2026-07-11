@@ -63,6 +63,10 @@ pub struct TargetArgs {
         default_value = "jpg,jpeg,png,tif,tiff,webp"
     )]
     pub ext: String,
+
+    /// 按元数据条件筛选文件，如 no-gps、has-date、make=Canon、artist~张、has:rating
+    #[arg(long = "where", value_name = "条件")]
+    pub where_expr: Option<String>,
 }
 
 /// 写入类命令共用的行为开关。
