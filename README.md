@@ -33,6 +33,7 @@
 | [`geotag`](#geotag--gpx-地理标记) | 用 GPX 轨迹按拍摄时间批量地理标记（插值写 GPS） |
 | [`apply`](#apply--从-csv-导入) | 从 CSV 批量导入元数据并写回（表格里批量编辑的写回端） |
 | [`report`](#report--元数据统计) | 统计一批照片的元数据覆盖（拍摄时间/GPS/相机分布/时间跨度） |
+| [`verify`](#verify--元数据体检) | 体检：查元数据问题（损坏/坐标越界/时间异常/字段不一致） |
 | `completions` | 生成 shell 补全脚本（bash/zsh/fish/powershell）或 man 手册页 |
 
 ## 下载安装
@@ -379,6 +380,18 @@ pic-killer report .\photos -r --where no-gps   # 也可配合 --where
 ```
 
 输出包含：总数、有/无拍摄时间、有/无 GPS、时间跨度、相机型号分布。
+
+## `verify` · 元数据体检
+
+只读地检查一批照片的元数据**问题**，分「问题」（错误）与「警告」两级：
+
+```powershell
+pic-killer verify .\photos -r
+```
+
+检查项：元数据损坏/无法读取、GPS 坐标越界、拍摄时间格式异常、拍摄时间在未来、
+`DateTimeOriginal` 与 `CreateDate` 不一致、方向值越界（非 1-8）。发现问题时返回非零退出码，
+便于脚本/CI 门禁。
 
 ## shell 补全 / man 手册
 

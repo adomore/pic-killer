@@ -51,6 +51,8 @@ pub enum Command {
     Report(ReportArgs),
     /// 生成 shell 补全脚本或 man 手册页
     Completions(CompletionsArgs),
+    /// 体检：检查元数据问题（损坏/坐标越界/时间异常/字段不一致）
+    Verify(VerifyArgs),
 }
 
 /// 选择要处理的文件（所有子命令共用）。
@@ -529,6 +531,14 @@ pub struct ApplyArgs {
 
 #[derive(Args, Debug)]
 pub struct ReportArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+}
+
+// ---------------------------- verify ----------------------------
+
+#[derive(Args, Debug)]
+pub struct VerifyArgs {
     #[command(flatten)]
     pub target: TargetArgs,
 }

@@ -45,6 +45,7 @@ fn run() -> Result<()> {
         Command::Apply(args) => commands::apply(args)?,
         Command::Report(args) => commands::report(args)?,
         Command::Completions(args) => commands::completions(args)?,
+        Command::Verify(args) => commands::verify(args)?,
     };
 
     if failures > 0 {

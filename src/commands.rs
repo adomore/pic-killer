@@ -9,8 +9,8 @@ use little_exif::exif_tag::ExifTag;
 
 use crate::cli::{
     ApplyArgs, CompletionsArgs, CopyArgs, GeotagArgs, GpsArgs, IptcArgs, RenameArgs, ReportArgs,
-    RestoreArgs, RotateArgs, SetArgs, ShowArgs, StripArgs, TargetArgs, TimeArgs, WriteArgs,
-    XmpArgs,
+    RestoreArgs, RotateArgs, SetArgs, ShowArgs, StripArgs, TargetArgs, TimeArgs, VerifyArgs,
+    WriteArgs, XmpArgs,
 };
 use crate::exif::{self, RotateOp, TagSelection, WriteOpts};
 use crate::gpx::{self, TrackPoint};
@@ -2202,6 +2202,119 @@ pub fn report(args: ReportArgs) -> Result<usize> {
     }
 
     Ok(0)
+}
+
+// ============================ verify ============================
+
+#[derive(PartialEq, Clone, Copy)]
+enum Severity {
+    Error,
+    Warn,
+}
+
+pub fn verify(args: VerifyArgs) -> Result<usize> {
+    let files = collect(&args.target);
+    let files = apply_where(files, &args.target.where_expr)?;
+    if files.is_empty() {
+        println!("未找到符合条件的图片文件。");
+        return Ok(0);
+    }
+
+    let pb = progress_bar(files.len());
+    let results: Vec<Vec<(Severity, String)>> = files
+        .iter()
+        .map(|p| {
+            let issues = check_file(p);
+            pb.inc(1);
+            issues
+        })
+        .collect();
+    pb.finish_and_clear();
+
+    let mut problems = 0usize;
+    let mut warns = 0usize;
+    for (path, issues) in files.iter().zip(results.iter()) {
+        if issues.is_empty() {
+            continue;
+        }
+        let has_err = issues.iter().any(|(s, _)| *s == Severity::Error);
+        if has_err {
+            problems += 1;
+        } else {
+            warns += 1;
+        }
+        println!(
+            "{} {}",
+            if has_err { "[问题]" } else { "[警告]" },
+            path.display()
+        );
+        for (sev, msg) in issues {
+            let mark = if *sev == Severity::Error { "✗" } else { "!" };
+            println!("  {mark} {msg}");
+        }
+    }
+
+    println!();
+    let ok = files.len() - problems - warns;
+    println!(
+        "共 {} 张：正常 {ok}，问题 {problems}，警告 {warns}",
+        files.len()
+    );
+    if problems == 0 && warns == 0 {
+        println!("未发现元数据问题 ✓");
+    }
+    Ok(problems)
+}
+
+/// 检查单个文件的元数据问题，返回 (严重级, 描述) 列表。
+fn check_file(path: &Path) -> Vec<(Severity, String)> {
+    let mut issues = Vec::new();
+    if exif::unsupported_hint(path).is_some() {
+        return issues; // BMP/GIF 非损坏，不算问题
+    }
+    let meta = match exif::load_metadata(path) {
+        Ok(m) => m,
+        Err(_) => {
+            issues.push((Severity::Error, "无法读取元数据（可能损坏或不支持）".into()));
+            return issues;
+        }
+    };
+    let tags = exif::list_tags(&meta);
+    let val = |n: &str| tags.iter().find(|t| t.name == n).map(|t| t.value.clone());
+
+    let now = Local::now().naive_local();
+    if let Some(d) = val("DateTimeOriginal") {
+        match parse_datetime(&d) {
+            Ok(dt) if dt > now => {
+                issues.push((Severity::Warn, format!("拍摄时间在未来：{d}")));
+            }
+            Ok(_) => {}
+            Err(_) => issues.push((Severity::Error, format!("拍摄时间格式异常：{d}"))),
+        }
+        if let Some(c) = val("CreateDate")
+            && c != d
+        {
+            issues.push((
+                Severity::Warn,
+                format!("DateTimeOriginal({d}) 与 CreateDate({c}) 不一致"),
+            ));
+        }
+    }
+    if let Some(fix) = exif::read_gps(&meta)
+        && (!(-90.0..=90.0).contains(&fix.lat) || !(-180.0..=180.0).contains(&fix.lon))
+    {
+        issues.push((
+            Severity::Error,
+            format!("GPS 坐标越界：{:.4}, {:.4}", fix.lat, fix.lon),
+        ));
+    }
+    if let Some(o) = val("Orientation")
+        && let Ok(n) = o.trim().parse::<i64>()
+        && !(1..=8).contains(&n)
+    {
+        issues.push((Severity::Error, format!("方向值异常：{n}（应为 1-8）")));
+    }
+    issues
 }
 
 // ============================ completions ============================
