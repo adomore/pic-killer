@@ -1,0 +1,118 @@
+name: Release
+
+# 推送形如 v1.2.3 的标签时触发；也可在 Actions 页手动运行。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的标签（如 v0.1.0）"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  BIN: pic-killer
+
+jobs:
+  build:
+    name: 构建 ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-musl }
+          - { os: ubuntu-latest,  target: aarch64-unknown-linux-gnu }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: macos-latest,   target: aarch64-apple-darwin }
+          - { os: macos-latest,   target: x86_64-apple-darwin }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: 缓存 cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: 安装交叉编译链接器（Linux）
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-musl)  sudo apt-get install -y musl-tools ;;
+            aarch64-unknown-linux-gnu)  sudo apt-get install -y gcc-aarch64-linux-gnu ;;
+          esac
+
+      - name: 构建
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: 打包
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ github.event.inputs.tag }}"
+          else
+            version="${GITHUB_REF_NAME}"
+          fi
+          dist="${BIN}-${version}-${{ matrix.target }}"
+          mkdir "$dist"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp "target/${{ matrix.target }}/release/${BIN}.exe" "$dist/"
+          else
+            cp "target/${{ matrix.target }}/release/${BIN}" "$dist/"
+          fi
+          cp README.md LICENSE "$dist/"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            7z a "${dist}.zip" "$dist" >/dev/null
+            echo "asset=${dist}.zip" >> "$GITHUB_OUTPUT"
+          else
+            tar -czf "${dist}.tar.gz" "$dist"
+            echo "asset=${dist}.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ steps.package.outputs.asset }}
+          if-no-files-found: error
+
+  release:
+    name: 发布 Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载全部产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: 生成校验和
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: 创建 Release 并上传
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: artifacts/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
