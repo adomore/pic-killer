@@ -8,8 +8,8 @@ use chrono::{DateTime, FixedOffset, Local, NaiveDateTime, TimeZone, Utc};
 use little_exif::exif_tag::ExifTag;
 
 use crate::cli::{
-    ApplyArgs, CopyArgs, GeotagArgs, GpsArgs, IptcArgs, RenameArgs, RestoreArgs, RotateArgs,
-    SetArgs, ShowArgs, StripArgs, TargetArgs, TimeArgs, WriteArgs, XmpArgs,
+    ApplyArgs, CopyArgs, GeotagArgs, GpsArgs, IptcArgs, RenameArgs, ReportArgs, RestoreArgs,
+    RotateArgs, SetArgs, ShowArgs, StripArgs, TargetArgs, TimeArgs, WriteArgs, XmpArgs,
 };
 use crate::exif::{self, RotateOp, TagSelection, WriteOpts};
 use crate::gpx::{self, TrackPoint};
@@ -1902,6 +1902,102 @@ fn process_strip(path: &Path, gps_only: bool, opts: &WriteOpts) -> Outcome {
         return Outcome::Failed(format!("{e:#}"));
     }
     Outcome::Changed(String::new())
+}
+
+// ============================ report ============================
+
+pub fn report(args: ReportArgs) -> Result<usize> {
+    use std::collections::HashMap;
+
+    let files = collect(&args.target);
+    let files = apply_where(files, &args.target.where_expr)?;
+    if files.is_empty() {
+        println!("未找到符合条件的图片文件。");
+        return Ok(0);
+    }
+
+    let pb = progress_bar(files.len());
+    let mut with_date = 0usize;
+    let mut with_gps = 0usize;
+    let mut unreadable = 0usize;
+    let mut cameras: HashMap<String, usize> = HashMap::new();
+    let mut min_date: Option<String> = None;
+    let mut max_date: Option<String> = None;
+
+    for path in &files {
+        pb.inc(1);
+        let meta = match exif::load_metadata(path) {
+            Ok(m) => m,
+            Err(_) => {
+                unreadable += 1;
+                continue;
+            }
+        };
+        if let Some(d) = exif::read_capture_time(&meta) {
+            with_date += 1;
+            if min_date.as_ref().is_none_or(|m| &d < m) {
+                min_date = Some(d.clone());
+            }
+            if max_date.as_ref().is_none_or(|m| &d > m) {
+                max_date = Some(d);
+            }
+        }
+        if exif::read_gps(&meta).is_some() {
+            with_gps += 1;
+        }
+        let tags = exif::list_tags(&meta);
+        let find = |n: &str| {
+            tags.iter()
+                .find(|t| t.name == n)
+                .map(|t| t.value.clone())
+                .unwrap_or_default()
+        };
+        let cam = format!("{} {}", find("Make"), find("Model"))
+            .trim()
+            .to_string();
+        let cam = if cam.is_empty() {
+            "(无相机信息)".to_string()
+        } else {
+            cam
+        };
+        *cameras.entry(cam).or_default() += 1;
+    }
+    pb.finish_and_clear();
+
+    let total = files.len();
+    println!("PIC-Killer · 元数据统计");
+    println!("  共 {total} 张照片");
+    println!();
+    println!(
+        "  拍摄时间：{with_date} 有，{} 无",
+        total - with_date - unreadable
+    );
+    println!(
+        "  GPS 定位：{with_gps} 有，{} 无",
+        total - with_gps - unreadable
+    );
+    if unreadable > 0 {
+        println!("  无法读取：{unreadable}");
+    }
+    if let (Some(lo), Some(hi)) = (&min_date, &max_date) {
+        println!("  时间跨度：{lo}  ~  {hi}");
+    }
+
+    println!();
+    println!("  相机分布：");
+    let mut cams: Vec<(&String, &usize)> = cameras.iter().collect();
+    cams.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    let width = cams
+        .iter()
+        .map(|(n, _)| n.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(32);
+    for (name, count) in cams {
+        println!("    {name:<width$}  {count}");
+    }
+
+    Ok(0)
 }
 
 #[cfg(test)]

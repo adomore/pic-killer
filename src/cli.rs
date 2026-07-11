@@ -47,6 +47,8 @@ pub enum Command {
     Geotag(GeotagArgs),
     /// 从 CSV 批量导入元数据并写回（file,field,value）
     Apply(ApplyArgs),
+    /// 统计一批照片的元数据覆盖情况（拍摄时间/GPS/相机分布等）
+    Report(ReportArgs),
 }
 
 /// 选择要处理的文件（所有子命令共用）。
@@ -511,4 +513,12 @@ pub struct ApplyArgs {
 
     #[command(flatten)]
     pub write: WriteArgs,
+}
+
+// ---------------------------- report ----------------------------
+
+#[derive(Args, Debug)]
+pub struct ReportArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
 }

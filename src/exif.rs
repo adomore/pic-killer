@@ -304,10 +304,19 @@ pub fn remove_gps(metadata: &mut Metadata) -> usize {
 }
 
 fn to_dms(deg: f64) -> Vec<uR64> {
-    let d = deg.floor();
-    let m = ((deg - d) * 60.0).floor();
-    let s = (deg - d - m / 60.0) * 3600.0;
-    vec![uR64::from(d as u32), uR64::from(m as u32), uR64::from(s)]
+    // 以「百分之一弧秒」为单位分解，避免 0.1×60 的浮点误差产生 5'60" 这类不规范值
+    let total = (deg.abs() * 360_000.0).round() as u64;
+    let d = (total / 360_000) as u32;
+    let m = ((total % 360_000) / 6_000) as u32;
+    let cs = (total % 6_000) as u32; // 剩余的百分之一弧秒
+    vec![
+        uR64::from(d),
+        uR64::from(m),
+        uR64 {
+            nominator: cs,
+            denominator: 100,
+        },
+    ]
 }
 
 fn dms_to_decimal(v: &[f64]) -> f64 {

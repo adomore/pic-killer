@@ -32,6 +32,7 @@
 | [`restore`](#restore--从备份还原) | 从 `.bak` 备份还原文件，撤销之前的修改 |
 | [`geotag`](#geotag--gpx-地理标记) | 用 GPX 轨迹按拍摄时间批量地理标记（插值写 GPS） |
 | [`apply`](#apply--从-csv-导入) | 从 CSV 批量导入元数据并写回（表格里批量编辑的写回端） |
+| [`report`](#report--元数据统计) | 统计一批照片的元数据覆盖（拍摄时间/GPS/相机分布/时间跨度） |
 
 ## 下载安装
 
@@ -66,11 +67,12 @@ cargo install --path .         # 或直接安装到 PATH
 
 ## 通用说明
 
-所有子命令都接受一个或多个**文件或目录**作为处理对象：
+所有子命令都接受一个或多个**文件、目录或通配符**作为处理对象：
 
 - `-r, --recursive` 递归子目录（目录默认只处理一层）
 - `--ext <列表>` 指定处理的扩展名（默认 `jpg,jpeg,png,tif,tiff,webp`）
 - `--where <条件>` 按元数据筛选要处理的文件（见下）
+- **内置通配符**：`pic-killer set "*.jpg" ...`（Windows 的 cmd/PowerShell 不会为外部程序展开 `*`，本工具自己展开 `*`/`?`）
 
 ### `--where` 条件筛选
 
@@ -347,6 +349,17 @@ photo2.jpg,copyright,© 2024
 支持的字段（EXIF）：`datetimeoriginal`/`createdate`/`modifydate`/`alldates`、
 `artist` `copyright` `description` `software` `make` `model` `lensmodel` `owner` 等字符串标签、
 `orientation`、`usercomment`、`gps`（值 `纬度,经度[,海拔]`）、`gps.clear`。
+
+## `report` · 元数据统计
+
+只读地扫描一批照片，汇总元数据覆盖情况——快速看出「有多少缺 GPS/拍摄时间、都是什么相机拍的」。
+
+```powershell
+pic-killer report .\photos -r
+pic-killer report .\photos -r --where no-gps   # 也可配合 --where
+```
+
+输出包含：总数、有/无拍摄时间、有/无 GPS、时间跨度、相机型号分布。
 
 ---
 

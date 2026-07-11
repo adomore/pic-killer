@@ -43,6 +43,7 @@ fn run() -> Result<()> {
         Command::Restore(args) => commands::restore(args)?,
         Command::Geotag(args) => commands::geotag(args)?,
         Command::Apply(args) => commands::apply(args)?,
+        Command::Report(args) => commands::report(args)?,
     };
 
     if failures > 0 {
