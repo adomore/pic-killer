@@ -8,8 +8,8 @@ use chrono::{DateTime, FixedOffset, Local, NaiveDateTime, TimeZone, Utc};
 use little_exif::exif_tag::ExifTag;
 
 use crate::cli::{
-    CopyArgs, GeotagArgs, GpsArgs, IptcArgs, RenameArgs, RestoreArgs, RotateArgs, SetArgs,
-    ShowArgs, StripArgs, TargetArgs, TimeArgs, WriteArgs, XmpArgs,
+    ApplyArgs, CopyArgs, GeotagArgs, GpsArgs, IptcArgs, RenameArgs, RestoreArgs, RotateArgs,
+    SetArgs, ShowArgs, StripArgs, TargetArgs, TimeArgs, WriteArgs, XmpArgs,
 };
 use crate::exif::{self, RotateOp, TagSelection, WriteOpts};
 use crate::gpx::{self, TrackPoint};
@@ -1490,6 +1490,197 @@ fn parse_tz(s: &str) -> Result<FixedOffset> {
     FixedOffset::east_opt(secs).context("时区偏移超出范围")
 }
 
+// ============================ apply ============================
+
+pub fn apply(args: ApplyArgs) -> Result<usize> {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    let raw = std::fs::read_to_string(&args.from)
+        .map_err(|e| anyhow::anyhow!("读取 CSV 失败：{}：{e}", args.from.display()))?;
+    // 去掉 Excel/记事本常见的 UTF-8 BOM，否则表头首字段会带上 \u{feff}
+    let text = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
+
+    // 解析 CSV，按文件分组（保持首次出现的顺序）
+    let mut order: Vec<PathBuf> = Vec::new();
+    let mut edits: HashMap<PathBuf, Vec<(String, String)>> = HashMap::new();
+    for (idx, raw) in text.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let cols = parse_csv_line(line);
+        if cols.len() < 3 {
+            bail!("CSV 第 {} 行需要 file,field,value 三列：{line}", idx + 1);
+        }
+        let (file, field, value) = (cols[0].trim(), cols[1].trim(), cols[2].trim());
+        // 跳过表头
+        if idx == 0 && file.eq_ignore_ascii_case("file") && field.eq_ignore_ascii_case("field") {
+            continue;
+        }
+        if file.is_empty() || field.is_empty() {
+            continue;
+        }
+        let path = PathBuf::from(file);
+        if !edits.contains_key(&path) {
+            order.push(path.clone());
+        }
+        edits
+            .entry(path)
+            .or_default()
+            .push((field.to_string(), value.to_string()));
+    }
+
+    if order.is_empty() {
+        println!("CSV 中没有可应用的记录。");
+        return Ok(0);
+    }
+
+    let total: usize = edits.values().map(Vec::len).sum();
+    println!("PIC-Killer · 从 CSV 导入元数据");
+    println!("  来源：{}", args.from.display());
+    println!("  文件：{} 个，共 {total} 条字段", order.len());
+    if args.write.dry_run {
+        println!("  模式：预览（不写入）");
+    }
+    if !confirm_write(&args.write)? {
+        println!("已取消。");
+        return Ok(0);
+    }
+    println!();
+
+    let opts = write_opts(&args.write, true);
+    let stats = run_batch(&order, &args.write, |_, path| match edits.get(path) {
+        Some(fields) => process_apply(path, fields, &opts),
+        None => Outcome::Skipped("无字段".into()),
+    });
+    Ok(stats.failed)
+}
+
+fn process_apply(path: &Path, fields: &[(String, String)], opts: &WriteOpts) -> Outcome {
+    if let Some(hint) = exif::unsupported_hint(path) {
+        return Outcome::Skipped(hint);
+    }
+    let mut metadata = match exif::load_metadata(path) {
+        Ok(m) => m,
+        Err(e) => return Outcome::Failed(format!("{e:#}")),
+    };
+    for (field, value) in fields {
+        if let Err(e) = apply_field(&mut metadata, field, value) {
+            return Outcome::Failed(format!("{e:#}"));
+        }
+    }
+    if let Err(e) = exif::commit_metadata(path, &metadata, opts) {
+        return Outcome::Failed(format!("{e:#}"));
+    }
+    Outcome::Changed(format!("应用了 {} 个字段", fields.len()))
+}
+
+/// 把 CSV 的一个 (字段, 值) 应用到 EXIF 元数据上。
+fn apply_field(
+    metadata: &mut little_exif::metadata::Metadata,
+    field: &str,
+    value: &str,
+) -> Result<()> {
+    let f = field
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['-', '_', ' '], "");
+    match f.as_str() {
+        "datetimeoriginal" | "date" | "original" => {
+            metadata.set_tag(ExifTag::DateTimeOriginal(datetime_value(value)?));
+        }
+        "createdate" | "digitized" | "datetimedigitized" => {
+            metadata.set_tag(ExifTag::CreateDate(datetime_value(value)?));
+        }
+        "modifydate" | "modify" | "datetime" => {
+            metadata.set_tag(ExifTag::ModifyDate(datetime_value(value)?));
+        }
+        "alldates" | "all" => {
+            let v = datetime_value(value)?;
+            metadata.set_tag(ExifTag::DateTimeOriginal(v.clone()));
+            metadata.set_tag(ExifTag::CreateDate(v.clone()));
+            metadata.set_tag(ExifTag::ModifyDate(v));
+        }
+        "gps" => {
+            let (lat, lon, alt) = parse_gps(value)?;
+            for tag in exif::gps_tags(lat, lon, alt) {
+                metadata.set_tag(tag);
+            }
+        }
+        "gpsclear" | "cleargps" => {
+            exif::remove_gps(metadata);
+        }
+        "orientation" => {
+            metadata.set_tag(exif::orientation_tag(value)?);
+        }
+        "usercomment" => {
+            metadata.set_tag(exif::user_comment_tag(value));
+        }
+        _ => {
+            if let Some(tag) = exif::string_tag(&f, value.to_string()) {
+                metadata.set_tag(tag);
+            } else {
+                bail!("未知或暂不支持的字段 `{field}`（apply 目前支持 EXIF 字段）");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn datetime_value(value: &str) -> Result<String> {
+    Ok(timeop::format_exif(&parse_datetime(value)?))
+}
+
+fn parse_gps(value: &str) -> Result<(f64, f64, Option<f64>)> {
+    let parts: Vec<&str> = value
+        .split([',', ';', ' '])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.len() < 2 {
+        bail!("GPS 值需为 `纬度,经度[,海拔]`：{value}");
+    }
+    let lat = parts[0]
+        .parse()
+        .map_err(|_| anyhow::anyhow!("纬度无效：{}", parts[0]))?;
+    let lon = parts[1]
+        .parse()
+        .map_err(|_| anyhow::anyhow!("经度无效：{}", parts[1]))?;
+    let alt = parts.get(2).and_then(|s| s.parse().ok());
+    Ok((lat, lon, alt))
+}
+
+/// 解析一行 CSV，支持双引号包裹与 `""` 转义。
+fn parse_csv_line(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_quotes {
+            if c == '"' {
+                if chars.peek() == Some(&'"') {
+                    cur.push('"');
+                    chars.next();
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                cur.push(c);
+            }
+        } else {
+            match c {
+                '"' => in_quotes = true,
+                ',' => fields.push(std::mem::take(&mut cur)),
+                _ => cur.push(c),
+            }
+        }
+    }
+    fields.push(cur);
+    fields
+}
+
 // ============================ set ============================
 
 pub fn set(args: SetArgs) -> Result<usize> {
@@ -1711,4 +1902,46 @@ fn process_strip(path: &Path, gps_only: bool, opts: &WriteOpts) -> Outcome {
         return Outcome::Failed(format!("{e:#}"));
     }
     Outcome::Changed(String::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn csv_plain() {
+        assert_eq!(parse_csv_line("a,b,c"), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn csv_quoted_comma() {
+        // 引号内的逗号不是分隔符
+        assert_eq!(
+            parse_csv_line(r#"photo.jpg,gps,"30.1,120.1""#),
+            vec!["photo.jpg", "gps", "30.1,120.1"]
+        );
+    }
+
+    #[test]
+    fn csv_escaped_quote() {
+        assert_eq!(
+            parse_csv_line(r#"a,b,"say ""hi"""#),
+            vec!["a", "b", "say \"hi\""]
+        );
+    }
+
+    #[test]
+    fn csv_trailing_empty() {
+        assert_eq!(parse_csv_line("a,b,"), vec!["a", "b", ""]);
+    }
+
+    #[test]
+    fn parse_gps_variants() {
+        assert_eq!(parse_gps("30.1,120.1").unwrap(), (30.1, 120.1, None));
+        assert_eq!(
+            parse_gps("30.1, 120.1, 50").unwrap(),
+            (30.1, 120.1, Some(50.0))
+        );
+        assert!(parse_gps("30.1").is_err());
+    }
 }

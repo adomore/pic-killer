@@ -42,6 +42,7 @@ fn run() -> Result<()> {
         Command::Iptc(args) => commands::iptc(args)?,
         Command::Restore(args) => commands::restore(args)?,
         Command::Geotag(args) => commands::geotag(args)?,
+        Command::Apply(args) => commands::apply(args)?,
     };
 
     if failures > 0 {

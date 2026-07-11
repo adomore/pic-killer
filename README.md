@@ -31,6 +31,7 @@
 | [`iptc`](#iptc--读写-iptc-iim) | 读写旧版 IPTC-IIM：标题/说明/关键词/作者/城市/版权等（JPEG） |
 | [`restore`](#restore--从备份还原) | 从 `.bak` 备份还原文件，撤销之前的修改 |
 | [`geotag`](#geotag--gpx-地理标记) | 用 GPX 轨迹按拍摄时间批量地理标记（插值写 GPS） |
+| [`apply`](#apply--从-csv-导入) | 从 CSV 批量导入元数据并写回（表格里批量编辑的写回端） |
 
 ## 下载安装
 
@@ -321,6 +322,31 @@ pic-killer geotag .\photos --gpx .\track.gpx --offset +30s
 
 > 拍摄时间是本地时间、GPX 时间通常是 UTC，两者需对齐——所以 `--tz` 很关键。
 > 无拍摄时间、或落在轨迹空档（超 `--max-gap`）的照片会被安全跳过。
+
+## `apply` · 从 CSV 导入
+
+用一份 `file,field,value` 三列 CSV 批量写回元数据——配合 `show --csv/--json` 导出，就能
+「导出 → 表格里批量编辑 → 写回」。同一文件的多个字段会合并成一次写入（并行、原子）。
+
+```powershell
+pic-killer apply --from meta.csv
+```
+
+CSV 示例（含逗号的值用引号包裹；可带表头，自动跳过；容忍 Excel 的 UTF-8 BOM）：
+
+```csv
+file,field,value
+photo1.jpg,artist,张三
+photo1.jpg,datetimeoriginal,2023-03-03 12:00:00
+photo1.jpg,gps,"31.23,121.47,15"
+photo1.jpg,orientation,cw90
+photo2.jpg,make,Canon
+photo2.jpg,copyright,© 2024
+```
+
+支持的字段（EXIF）：`datetimeoriginal`/`createdate`/`modifydate`/`alldates`、
+`artist` `copyright` `description` `software` `make` `model` `lensmodel` `owner` 等字符串标签、
+`orientation`、`usercomment`、`gps`（值 `纬度,经度[,海拔]`）、`gps.clear`。
 
 ---
 

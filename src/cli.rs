@@ -45,6 +45,8 @@ pub enum Command {
     Restore(RestoreArgs),
     /// 用 GPX 轨迹按拍摄时间批量地理标记（写 GPS）
     Geotag(GeotagArgs),
+    /// 从 CSV 批量导入元数据并写回（file,field,value）
+    Apply(ApplyArgs),
 }
 
 /// 选择要处理的文件（所有子命令共用）。
@@ -497,4 +499,16 @@ pub struct GeotagArgs {
     /// 最大时间间隔（秒）：与轨迹点相差超过此值则不标记
     #[arg(long, value_name = "秒", default_value_t = 600)]
     pub max_gap: i64,
+}
+
+// ----------------------------- apply ----------------------------
+
+#[derive(Args, Debug)]
+pub struct ApplyArgs {
+    /// CSV 文件，三列 file,field,value（可含表头）
+    #[arg(long, value_name = "CSV")]
+    pub from: PathBuf,
+
+    #[command(flatten)]
+    pub write: WriteArgs,
 }
