@@ -1582,19 +1582,118 @@ fn process_apply(path: &Path, fields: &[(String, String)], opts: &WriteOpts) -> 
     if let Some(hint) = exif::unsupported_hint(path) {
         return Outcome::Skipped(hint);
     }
-    let mut metadata = match exif::load_metadata(path) {
-        Ok(m) => m,
-        Err(e) => return Outcome::Failed(format!("{e:#}")),
-    };
+
+    // 按目标元数据体系分流：EXIF / XMP(xmp: 前缀) / IPTC(iptc: 前缀)
+    let mut exif_fields: Vec<(&str, &str)> = Vec::new();
+    let mut xmp_edit = XmpEdit::default();
+    let mut iptc_edit = IptcEdit::default();
     for (field, value) in fields {
-        if let Err(e) = apply_field(&mut metadata, field, value) {
+        let fl = field.to_ascii_lowercase();
+        if fl.starts_with("xmp:") {
+            let (qname, val) = resolve_xmp_field(&field[4..], value);
+            xmp_edit.sets.push((qname, val));
+        } else if let Some(name) = fl.strip_prefix("iptc:") {
+            match iptc::resolve_field(name) {
+                Some((r, n)) => iptc_edit.sets.push((r, n, vec![value.clone()])),
+                None => return Outcome::Failed(format!("未知 IPTC 字段 `{field}`")),
+            }
+        } else {
+            exif_fields.push((field, value));
+        }
+    }
+
+    // 1) EXIF
+    if !exif_fields.is_empty() {
+        let mut metadata = match exif::load_metadata(path) {
+            Ok(m) => m,
+            Err(e) => return Outcome::Failed(format!("{e:#}")),
+        };
+        for (field, value) in &exif_fields {
+            if let Err(e) = apply_field(&mut metadata, field, value) {
+                return Outcome::Failed(format!("{e:#}"));
+            }
+        }
+        if let Err(e) = exif::commit_metadata(path, &metadata, opts) {
             return Outcome::Failed(format!("{e:#}"));
         }
     }
-    if let Err(e) = exif::commit_metadata(path, &metadata, opts) {
+
+    // 2) XMP（JPEG/PNG）
+    if !xmp_edit.is_empty()
+        && let Err(e) = apply_xmp_edit(path, &xmp_edit, opts)
+    {
         return Outcome::Failed(format!("{e:#}"));
     }
+
+    // 3) IPTC（JPEG）
+    if !iptc_edit.is_empty()
+        && let Err(e) = apply_iptc_edit(path, &iptc_edit, opts)
+    {
+        return Outcome::Failed(format!("{e:#}"));
+    }
+
     Outcome::Changed(format!("应用了 {} 个字段", fields.len()))
+}
+
+/// 把 XMP 编辑写入文件（JPEG/PNG 段手术 + 原子落盘）。
+fn apply_xmp_edit(path: &Path, edit: &XmpEdit, opts: &WriteOpts) -> Result<()> {
+    let mut bytes = std::fs::read(path)?;
+    if !xmp::supports_xmp(&bytes) {
+        bail!("XMP 仅支持 JPEG/PNG");
+    }
+    let existing = xmp::extract_packet_bytes(&bytes);
+    let existing_str = match &existing {
+        Some(p) => Some(std::str::from_utf8(p).map_err(|_| anyhow::anyhow!("现有 XMP 非 UTF-8"))?),
+        None => None,
+    };
+    let packet = xmp::apply(existing_str, edit)?;
+    xmp::write_packet(&mut bytes, &packet)?;
+    exif::commit_raw(path, &bytes, opts)
+}
+
+/// 把 IPTC 编辑写入文件（JPEG APP13）。
+fn apply_iptc_edit(path: &Path, edit: &IptcEdit, opts: &WriteOpts) -> Result<()> {
+    let mut bytes = std::fs::read(path)?;
+    if bytes.len() < 2 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
+        bail!("IPTC 仅支持 JPEG");
+    }
+    let datasets = iptc::apply(&iptc::read_datasets(&bytes), edit);
+    iptc::set_jpeg_iptc(&mut bytes, &datasets)?;
+    exif::commit_raw(path, &bytes, opts)
+}
+
+/// 把 `xmp:` 之后的字段名解析成 (限定名, 值)。既支持完整限定名（含 `:`），
+/// 也支持 title/rating/keywords 等友好简写。
+fn resolve_xmp_field(name: &str, value: &str) -> (String, XmpValue) {
+    // 完整限定名（如 dc:title、photoshop:City）
+    if name.contains(':') {
+        let v = match name.to_ascii_lowercase().as_str() {
+            "dc:title" | "dc:description" | "dc:rights" => XmpValue::LangAlt(value.to_string()),
+            "dc:creator" => XmpValue::Seq(split_multi(value)),
+            "dc:subject" => XmpValue::Bag(split_multi(value)),
+            _ => XmpValue::Simple(value.to_string()),
+        };
+        return (name.to_string(), v);
+    }
+    match name.to_ascii_lowercase().as_str() {
+        "title" => ("dc:title".into(), XmpValue::LangAlt(value.into())),
+        "description" | "caption" => ("dc:description".into(), XmpValue::LangAlt(value.into())),
+        "creator" | "author" => ("dc:creator".into(), XmpValue::Seq(split_multi(value))),
+        "rights" | "copyright" => ("dc:rights".into(), XmpValue::LangAlt(value.into())),
+        "rating" => ("xmp:Rating".into(), XmpValue::Simple(value.into())),
+        "label" => ("xmp:Label".into(), XmpValue::Simple(value.into())),
+        "keywords" | "subject" => ("dc:subject".into(), XmpValue::Bag(split_multi(value))),
+        "city" => ("photoshop:City".into(), XmpValue::Simple(value.into())),
+        "country" => ("photoshop:Country".into(), XmpValue::Simple(value.into())),
+        other => (format!("dc:{other}"), XmpValue::Simple(value.into())),
+    }
+}
+
+fn split_multi(s: &str) -> Vec<String> {
+    s.split([';', '|'])
+        .map(|x| x.trim().to_string())
+        .filter(|x| !x.is_empty())
+        .collect()
 }
 
 /// 把 CSV 的一个 (字段, 值) 应用到 EXIF 元数据上。

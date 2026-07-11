@@ -343,10 +343,13 @@ file,field,value
 photo1.jpg,artist,张三
 photo1.jpg,datetimeoriginal,2023-03-03 12:00:00
 photo1.jpg,gps,"31.23,121.47,15"
-photo1.jpg,orientation,cw90
-photo2.jpg,make,Canon
-photo2.jpg,copyright,© 2024
+photo1.jpg,iso,200
+photo1.jpg,xmp:title,西湖日出
+photo1.jpg,xmp:rating,5
+photo1.jpg,iptc:city,杭州
 ```
+
+字段名加 `xmp:` / `iptc:` 前缀即写入对应体系（EXIF/XMP/IPTC 可在同一份 CSV 里混用，同一文件合并成各段一次写入）。
 
 支持的字段（EXIF）：`datetimeoriginal`/`createdate`/`modifydate`/`alldates`、
 `artist` `copyright` `description` `software` `make` `model` `lensmodel` `owner` 等字符串标签、
