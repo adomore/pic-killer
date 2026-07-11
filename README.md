@@ -1,5 +1,10 @@
 # PIC-Killer
 
+[![CI](https://github.com/adomore/pic-killer/actions/workflows/ci.yml/badge.svg)](https://github.com/adomore/pic-killer/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/adomore/pic-killer?logo=github)](https://github.com/adomore/pic-killer/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/adomore/pic-killer/total?logo=github)](https://github.com/adomore/pic-killer/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 **照片元数据瑞士军刀** —— 用 Rust 实现的命令行工具。
 
 无损批量修改照片的 EXIF 元数据：拍摄时间、作者版权、相机镜头、GPS 定位、方向，以及查看与清除。
@@ -25,11 +30,35 @@
 | [`xmp`](#xmp--读写-xmp) | 读写 XMP：标题/描述/作者/评分/关键词/城市等（JPEG 与 PNG） |
 | [`iptc`](#iptc--读写-iptc-iim) | 读写旧版 IPTC-IIM：标题/说明/关键词/作者/城市/版权等（JPEG） |
 
-## 构建
+## 下载安装
 
-```powershell
-cargo build --release
-# 产物：target\release\pic-killer.exe
+### 预编译二进制（推荐）
+
+前往 **[Releases 页](https://github.com/adomore/pic-killer/releases/latest)** 下载对应平台的压缩包，解压即得单个可执行文件：
+
+| 平台 | 下载文件 |
+|------|----------|
+| Windows x64 | `pic-killer-<版本>-x86_64-pc-windows-msvc.zip` |
+| macOS (Apple Silicon) | `pic-killer-<版本>-aarch64-apple-darwin.tar.gz` |
+| macOS (Intel) | `pic-killer-<版本>-x86_64-apple-darwin.tar.gz` |
+| Linux x64 | `pic-killer-<版本>-x86_64-unknown-linux-gnu.tar.gz`（静态版：`…-musl`） |
+| Linux ARM64 | `pic-killer-<版本>-aarch64-unknown-linux-gnu.tar.gz` |
+
+每次发布都附带 `SHA256SUMS.txt`，可校验下载完整性：
+
+```bash
+sha256sum -c SHA256SUMS.txt
+```
+
+### 从源码构建
+
+需要 Rust 1.88+（edition 2024）：
+
+```bash
+git clone https://github.com/adomore/pic-killer.git
+cd pic-killer
+cargo build --release          # 产物：target/release/pic-killer
+cargo install --path .         # 或直接安装到 PATH
 ```
 
 ## 通用说明

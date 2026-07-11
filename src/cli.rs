@@ -9,7 +9,11 @@ use std::path::PathBuf;
 /// 以及查看与清除。只改写元数据段，不重新编码图像，像素数据完全无损。
 /// 支持 JPEG / PNG / TIFF / WebP / HEIC / AVIF / JXL。
 #[derive(Parser, Debug)]
-#[command(name = "pic-killer", version, about = "照片元数据瑞士军刀（无损批量修改）")]
+#[command(
+    name = "pic-killer",
+    version,
+    about = "照片元数据瑞士军刀（无损批量修改）"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -51,7 +55,11 @@ pub struct TargetArgs {
     pub recursive: bool,
 
     /// 要处理的扩展名，逗号分隔
-    #[arg(long, value_name = "列表", default_value = "jpg,jpeg,png,tif,tiff,webp")]
+    #[arg(
+        long,
+        value_name = "列表",
+        default_value = "jpg,jpeg,png,tif,tiff,webp"
+    )]
     pub ext: String,
 }
 
@@ -103,7 +111,12 @@ pub struct TimeArgs {
     pub sequential: Option<String>,
 
     /// 序列模式每张之间的间隔（默认 +1s）
-    #[arg(long, value_name = "偏移", default_value = "+1s", allow_hyphen_values = true)]
+    #[arg(
+        long,
+        value_name = "偏移",
+        default_value = "+1s",
+        allow_hyphen_values = true
+    )]
     pub interval: String,
 
     /// 从文件名中提取日期时间（如 IMG_20230115_143022.jpg）

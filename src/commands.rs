@@ -3,7 +3,7 @@
 use std::io::{self, Write};
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::NaiveDateTime;
 use little_exif::exif_tag::ExifTag;
 
@@ -13,10 +13,10 @@ use crate::cli::{
 };
 use crate::exif::{self, RotateOp, TagSelection, WriteOpts};
 use crate::iptc::{self, IptcEdit};
-use crate::xmp::{self, XmpEdit, XmpValue};
 use crate::namedate;
 use crate::scan;
-use crate::timeop::{self, parse_datetime, parse_delta, Delta};
+use crate::timeop::{self, Delta, parse_datetime, parse_delta};
+use crate::xmp::{self, XmpEdit, XmpValue};
 
 // ============================ 通用工具 ============================
 
@@ -104,7 +104,11 @@ fn print_summary(stats: &Stats, total: usize, dry_run: bool) {
 
 /// 解析 --tags 时间字段列表。
 fn parse_time_tags(s: &str) -> Result<TagSelection> {
-    let mut sel = TagSelection { original: false, digitized: false, modify: false };
+    let mut sel = TagSelection {
+        original: false,
+        digitized: false,
+        modify: false,
+    };
     for part in s.split(',') {
         match part.trim().to_ascii_lowercase().as_str() {
             "" => continue,
@@ -130,7 +134,10 @@ fn parse_time_tags(s: &str) -> Result<TagSelection> {
 enum TimeMode {
     Set(NaiveDateTime),
     Shift(Delta),
-    Sequential { start: NaiveDateTime, interval: Delta },
+    Sequential {
+        start: NaiveDateTime,
+        interval: Delta,
+    },
     FromName,
 }
 
@@ -188,10 +195,12 @@ fn process_time(
 
     let target = match mode {
         TimeMode::Set(t) => *t,
-        TimeMode::Sequential { start, interval } => match interval.scaled(index as i64).apply(*start) {
-            Some(t) => t,
-            None => return Outcome::Failed("时间计算溢出".into()),
-        },
+        TimeMode::Sequential { start, interval } => {
+            match interval.scaled(index as i64).apply(*start) {
+                Some(t) => t,
+                None => return Outcome::Failed("时间计算溢出".into()),
+            }
+        }
         TimeMode::Shift(delta) => match old.as_deref().and_then(|s| parse_datetime(s).ok()) {
             Some(dt) => match delta.apply(dt) {
                 Some(t) => t,
@@ -212,10 +221,11 @@ fn process_time(
     if let Err(e) = exif::commit_metadata(path, &metadata, opts) {
         return Outcome::Failed(format!("{e:#}"));
     }
-    if also_file_time && !opts.dry_run {
-        if let Err(e) = exif::set_file_time(path, target) {
-            return Outcome::Failed(format!("EXIF 已写入但设置文件时间失败：{e:#}"));
-        }
+    if also_file_time
+        && !opts.dry_run
+        && let Err(e) = exif::set_file_time(path, target)
+    {
+        return Outcome::Failed(format!("EXIF 已写入但设置文件时间失败：{e:#}"));
     }
 
     let old = old.unwrap_or_else(|| "(无)".into());
@@ -224,7 +234,9 @@ fn process_time(
 
 fn build_time_mode(a: &TimeArgs) -> Result<TimeMode> {
     if let Some(s) = &a.set {
-        return Ok(TimeMode::Set(parse_datetime(s).context("解析 --set 时间失败")?));
+        return Ok(TimeMode::Set(
+            parse_datetime(s).context("解析 --set 时间失败")?,
+        ));
     }
     if let Some(s) = &a.shift {
         let d = parse_delta(s).context("解析 --shift 偏移量失败")?;
@@ -249,7 +261,11 @@ fn describe_time_mode(mode: &TimeMode) -> String {
         TimeMode::Set(t) => format!("设为固定时间 {}", timeop::format_exif(t)),
         TimeMode::Shift(d) => format!("在原时间上偏移 {}", describe_delta(d)),
         TimeMode::Sequential { start, interval } => {
-            format!("从 {} 起，每张递增 {}", timeop::format_exif(start), describe_delta(interval))
+            format!(
+                "从 {} 起，每张递增 {}",
+                timeop::format_exif(start),
+                describe_delta(interval)
+            )
         }
         TimeMode::FromName => "从文件名提取日期".into(),
     }
@@ -332,7 +348,10 @@ pub fn show(args: ShowArgs) -> Result<usize> {
         };
 
         if let Some(fix) = exif::read_gps(&metadata) {
-            let alt = fix.alt.map(|a| format!("，海拔 {a:.1}m")).unwrap_or_default();
+            let alt = fix
+                .alt
+                .map(|a| format!("，海拔 {a:.1}m"))
+                .unwrap_or_default();
             println!("  位置：{:.6}, {:.6}{alt}", fix.lat, fix.lon);
         }
 
@@ -394,9 +413,15 @@ fn show_json(files: &[std::path::PathBuf], filter: Option<&str>) -> Result<usize
             out.push_str(",\n");
         }
         out.push_str("  {\n");
-        out.push_str(&format!("    \"file\": \"{}\",\n", json_escape(&path.display().to_string())));
+        out.push_str(&format!(
+            "    \"file\": \"{}\",\n",
+            json_escape(&path.display().to_string())
+        ));
         if let Some(fix) = exif::read_gps(&metadata) {
-            out.push_str(&format!("    \"latitude\": {:.6},\n    \"longitude\": {:.6},\n", fix.lat, fix.lon));
+            out.push_str(&format!(
+                "    \"latitude\": {:.6},\n    \"longitude\": {:.6},\n",
+                fix.lat, fix.lon
+            ));
         }
         out.push_str("    \"tags\": [\n");
         let tags = exif::list_tags(&metadata);
@@ -484,10 +509,10 @@ fn show_csv(files: &[std::path::PathBuf], filter: Option<&str>) -> Result<usize>
         };
         let file = path.display().to_string();
         for t in exif::list_tags(&metadata) {
-            if let Some(f) = filter {
-                if !t.name.to_ascii_lowercase().contains(f) {
-                    continue;
-                }
+            if let Some(f) = filter
+                && !t.name.to_ascii_lowercase().contains(f)
+            {
+                continue;
             }
             println!(
                 "{},{},{},0x{:04X},{}",
@@ -499,10 +524,20 @@ fn show_csv(files: &[std::path::PathBuf], filter: Option<&str>) -> Result<usize>
             );
         }
         for (k, v) in filter_props(read_xmp_props(path), filter) {
-            println!("{},XMP,{},,{}", csv_field(&file), csv_field(&k), csv_field(&v));
+            println!(
+                "{},XMP,{},,{}",
+                csv_field(&file),
+                csv_field(&k),
+                csv_field(&v)
+            );
         }
         for (k, v) in filter_props(read_iptc_props(path), filter) {
-            println!("{},IPTC,{},,{}", csv_field(&file), csv_field(&k), csv_field(&v));
+            println!(
+                "{},IPTC,{},,{}",
+                csv_field(&file),
+                csv_field(&k),
+                csv_field(&v)
+            );
         }
     }
     Ok(failed)
@@ -594,7 +629,10 @@ fn process_rotate(path: &Path, op: RotateOp, opts: &WriteOpts) -> Outcome {
     let current = exif::read_orientation(&metadata);
     let next = exif::compose_orientation(current, op);
     if next == current {
-        return Outcome::Skipped(format!("方向已是「{}」，无需修改", exif::orientation_desc(current)));
+        return Outcome::Skipped(format!(
+            "方向已是「{}」，无需修改",
+            exif::orientation_desc(current)
+        ));
     }
     metadata.set_tag(little_exif::exif_tag::ExifTag::Orientation(vec![next]));
     if let Err(e) = exif::commit_metadata(path, &metadata, opts) {
@@ -713,7 +751,12 @@ pub fn rename(args: RenameArgs) -> Result<usize> {
     if args.dry_run {
         println!("  模式：预览（不重命名）");
     }
-    let write = WriteArgs { backup: false, dry_run: args.dry_run, yes: args.yes, verbose: args.verbose };
+    let write = WriteArgs {
+        backup: false,
+        dry_run: args.dry_run,
+        yes: args.yes,
+        verbose: args.verbose,
+    };
     if !confirm_write(&write)? {
         println!("已取消。");
         return Ok(0);
@@ -721,7 +764,8 @@ pub fn rename(args: RenameArgs) -> Result<usize> {
     println!();
 
     // 记录已占用的目标路径（磁盘上已存在的 + 本批已分配的），避免冲突
-    let mut claimed: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+    let mut claimed: std::collections::HashSet<std::path::PathBuf> =
+        std::collections::HashSet::new();
     let mut stats = Stats::default();
 
     for path in &files {
@@ -772,10 +816,8 @@ fn plan_rename(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    if !dry_run {
-        if let Err(e) = std::fs::rename(path, &target) {
-            return Outcome::Failed(format!("重命名失败：{e}"));
-        }
+    if !dry_run && let Err(e) = std::fs::rename(path, &target) {
+        return Outcome::Failed(format!("重命名失败：{e}"));
     }
     claimed.insert(target);
     Outcome::Changed(format!("-> {new_name}"))
@@ -912,25 +954,31 @@ fn process_xmp(path: &Path, edit: &XmpEdit, clear: bool, opts: &WriteOpts) -> Ou
 fn build_xmp_edit(a: &XmpArgs) -> Result<XmpEdit> {
     let mut edit = XmpEdit::default();
     if let Some(v) = &a.title {
-        edit.sets.push(("dc:title".into(), XmpValue::LangAlt(v.clone())));
+        edit.sets
+            .push(("dc:title".into(), XmpValue::LangAlt(v.clone())));
     }
     if let Some(v) = &a.description {
-        edit.sets.push(("dc:description".into(), XmpValue::LangAlt(v.clone())));
+        edit.sets
+            .push(("dc:description".into(), XmpValue::LangAlt(v.clone())));
     }
     if !a.creator.is_empty() {
-        edit.sets.push(("dc:creator".into(), XmpValue::Seq(a.creator.clone())));
+        edit.sets
+            .push(("dc:creator".into(), XmpValue::Seq(a.creator.clone())));
     }
     if let Some(v) = &a.rights {
-        edit.sets.push(("dc:rights".into(), XmpValue::LangAlt(v.clone())));
+        edit.sets
+            .push(("dc:rights".into(), XmpValue::LangAlt(v.clone())));
     }
     if let Some(r) = a.rating {
         if !(0..=5).contains(&r) {
             bail!("--rating 需在 0-5 之间");
         }
-        edit.sets.push(("xmp:Rating".into(), XmpValue::Simple(r.to_string())));
+        edit.sets
+            .push(("xmp:Rating".into(), XmpValue::Simple(r.to_string())));
     }
     if let Some(v) = &a.label {
-        edit.sets.push(("xmp:Label".into(), XmpValue::Simple(v.clone())));
+        edit.sets
+            .push(("xmp:Label".into(), XmpValue::Simple(v.clone())));
     }
     if let Some(v) = &a.keywords {
         let items: Vec<String> = v
@@ -941,10 +989,12 @@ fn build_xmp_edit(a: &XmpArgs) -> Result<XmpEdit> {
         edit.sets.push(("dc:subject".into(), XmpValue::Bag(items)));
     }
     if let Some(v) = &a.city {
-        edit.sets.push(("photoshop:City".into(), XmpValue::Simple(v.clone())));
+        edit.sets
+            .push(("photoshop:City".into(), XmpValue::Simple(v.clone())));
     }
     if let Some(v) = &a.country {
-        edit.sets.push(("photoshop:Country".into(), XmpValue::Simple(v.clone())));
+        edit.sets
+            .push(("photoshop:Country".into(), XmpValue::Simple(v.clone())));
     }
     for kv in &a.set {
         let (qname, val) = kv
@@ -955,7 +1005,8 @@ fn build_xmp_edit(a: &XmpArgs) -> Result<XmpEdit> {
         if xmp::namespace_uri(prefix).is_none() {
             bail!("未知的命名空间前缀 `{prefix}`（支持 dc/xmp/photoshop/lr 等）");
         }
-        edit.sets.push((qname.to_string(), XmpValue::Simple(val.to_string())));
+        edit.sets
+            .push((qname.to_string(), XmpValue::Simple(val.to_string())));
     }
     for name in &a.remove {
         edit.removes.push(name.trim().to_string());
@@ -1008,7 +1059,11 @@ pub fn iptc(args: IptcArgs) -> Result<usize> {
             println!("  设置：{}", names.join("、"));
         }
         if !edit.removes.is_empty() {
-            let names: Vec<String> = edit.removes.iter().map(|(r, n)| iptc::field_name(*r, *n)).collect();
+            let names: Vec<String> = edit
+                .removes
+                .iter()
+                .map(|(r, n)| iptc::field_name(*r, *n))
+                .collect();
             println!("  删除：{}", names.join("、"));
         }
     }
@@ -1101,13 +1156,13 @@ fn build_iptc_edit(a: &IptcArgs) -> Result<IptcEdit> {
         let (name, val) = kv
             .split_once('=')
             .with_context(|| format!("--set 格式应为 字段=值，收到 `{kv}`"))?;
-        let (r, n) = iptc::resolve_field(name)
-            .with_context(|| format!("未知的 IPTC 字段 `{name}`"))?;
+        let (r, n) =
+            iptc::resolve_field(name).with_context(|| format!("未知的 IPTC 字段 `{name}`"))?;
         edit.sets.push((r, n, vec![val.to_string()]));
     }
     for name in &a.remove {
-        let (r, n) = iptc::resolve_field(name)
-            .with_context(|| format!("未知的 IPTC 字段 `{name}`"))?;
+        let (r, n) =
+            iptc::resolve_field(name).with_context(|| format!("未知的 IPTC 字段 `{name}`"))?;
         edit.removes.push((r, n));
     }
     Ok(edit)
@@ -1295,7 +1350,14 @@ pub fn strip(args: StripArgs) -> Result<usize> {
     }
 
     println!("PIC-Killer · 清除元数据");
-    println!("  范围：{}", if args.gps { "仅 GPS 定位" } else { "全部元数据" });
+    println!(
+        "  范围：{}",
+        if args.gps {
+            "仅 GPS 定位"
+        } else {
+            "全部元数据"
+        }
+    );
     println!("  文件：{} 个", files.len());
     if args.write.dry_run {
         println!("  模式：预览（不写入）");

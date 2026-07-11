@@ -16,7 +16,11 @@ use chrono::NaiveDateTime;
 /// 从文件名（不含扩展名的主干即可，传整个文件名也行）提取日期时间。
 pub fn extract(file_stem: &str) -> Option<NaiveDateTime> {
     // 记录每个数字字符，忽略其它字符（分隔符）
-    let digits: Vec<u8> = file_stem.bytes().filter(|b| b.is_ascii_digit()).map(|b| b - b'0').collect();
+    let digits: Vec<u8> = file_stem
+        .bytes()
+        .filter(|b| b.is_ascii_digit())
+        .map(|b| b - b'0')
+        .collect();
     if digits.len() < 8 {
         return None;
     }
@@ -27,7 +31,8 @@ pub fn extract(file_stem: &str) -> Option<NaiveDateTime> {
         let month = num(&digits[start + 4..start + 6]) as u32;
         let day = num(&digits[start + 6..start + 8]) as u32;
 
-        if !(1970..=2099).contains(&year) || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        if !(1970..=2099).contains(&year) || !(1..=12).contains(&month) || !(1..=31).contains(&day)
+        {
             continue;
         }
 
@@ -45,10 +50,10 @@ pub fn extract(file_stem: &str) -> Option<NaiveDateTime> {
             (0, 0, 0)
         };
 
-        if let Some(date) = chrono::NaiveDate::from_ymd_opt(year, month, day) {
-            if let Some(dt) = date.and_hms_opt(hh, mm, ss) {
-                return Some(dt);
-            }
+        if let Some(date) = chrono::NaiveDate::from_ymd_opt(year, month, day)
+            && let Some(dt) = date.and_hms_opt(hh, mm, ss)
+        {
+            return Some(dt);
         }
     }
     None
@@ -68,30 +73,57 @@ mod tests {
 
     #[test]
     fn common_camera_names() {
-        assert_eq!(fmt("IMG_20230115_143022").as_deref(), Some("2023-01-15 14:30:22"));
-        assert_eq!(fmt("20230115_143022").as_deref(), Some("2023-01-15 14:30:22"));
-        assert_eq!(fmt("20230115143022").as_deref(), Some("2023-01-15 14:30:22"));
-        assert_eq!(fmt("PXL_20230115_143022123").as_deref(), Some("2023-01-15 14:30:22"));
-        assert_eq!(fmt("2023-01-15 14.30.22").as_deref(), Some("2023-01-15 14:30:22"));
-        assert_eq!(fmt("Screenshot_2023-01-15-14-30-22").as_deref(), Some("2023-01-15 14:30:22"));
+        assert_eq!(
+            fmt("IMG_20230115_143022").as_deref(),
+            Some("2023-01-15 14:30:22")
+        );
+        assert_eq!(
+            fmt("20230115_143022").as_deref(),
+            Some("2023-01-15 14:30:22")
+        );
+        assert_eq!(
+            fmt("20230115143022").as_deref(),
+            Some("2023-01-15 14:30:22")
+        );
+        assert_eq!(
+            fmt("PXL_20230115_143022123").as_deref(),
+            Some("2023-01-15 14:30:22")
+        );
+        assert_eq!(
+            fmt("2023-01-15 14.30.22").as_deref(),
+            Some("2023-01-15 14:30:22")
+        );
+        assert_eq!(
+            fmt("Screenshot_2023-01-15-14-30-22").as_deref(),
+            Some("2023-01-15 14:30:22")
+        );
     }
 
     #[test]
     fn date_only() {
         assert_eq!(fmt("2023-01-15").as_deref(), Some("2023-01-15 00:00:00"));
-        assert_eq!(fmt("photo_20230115").as_deref(), Some("2023-01-15 00:00:00"));
+        assert_eq!(
+            fmt("photo_20230115").as_deref(),
+            Some("2023-01-15 00:00:00")
+        );
     }
 
     #[test]
     fn leading_number_before_date() {
         // 前导序号不应干扰：1_20230115_143022
-        assert_eq!(fmt("1_20230115_143022").as_deref(), Some("2023-01-15 14:30:22"));
+        assert_eq!(
+            fmt("1_20230115_143022").as_deref(),
+            Some("2023-01-15 14:30:22")
+        );
     }
 
     #[test]
     fn invalid_time_falls_back_to_midnight() {
         // 99:99:99 非法 → 退回 00:00:00
-        assert_eq!(fmt("20230115_999999").as_deref(), Some("2023-01-15 00:00:00"));
+        assert_eq!(
+            fmt("20230115_999999").as_deref(),
+            Some("2023-01-15 00:00:00")
+        );
     }
 
     #[test]

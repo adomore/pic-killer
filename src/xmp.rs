@@ -8,7 +8,7 @@
 
 use std::io::Write as _;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use quick_xml::escape::escape;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::name::QName;
@@ -220,11 +220,11 @@ fn edit_existing(packet: &str, edit: &XmpEdit) -> Result<String> {
                 if in_desc && child_depth == 0 && name == "rdf:Description" {
                     // 关闭目标 Description 前，补写尚未出现的 set 属性
                     for (q, _) in &edit.sets {
-                        if !done.iter().any(|d| d == q) {
-                            if let Some(frag) = edit.fragment_for(q) {
-                                writer.get_mut().write_all(b"\n   ")?;
-                                writer.get_mut().write_all(frag.as_bytes())?;
-                            }
+                        if !done.iter().any(|d| d == q)
+                            && let Some(frag) = edit.fragment_for(q)
+                        {
+                            writer.get_mut().write_all(b"\n   ")?;
+                            writer.get_mut().write_all(frag.as_bytes())?;
                         }
                     }
                     in_desc = false;
@@ -257,7 +257,9 @@ fn rebuild_desc_start(e: &BytesStart, edit: &XmpEdit) -> Result<BytesStart<'stat
     for attr in e.attributes() {
         let attr = attr.map_err(|err| anyhow::anyhow!("XMP 属性解析失败：{err}"))?;
         let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-        let value = attr.unescape_value().map_err(|err| anyhow::anyhow!("XMP 属性解码失败：{err}"))?;
+        let value = attr
+            .unescape_value()
+            .map_err(|err| anyhow::anyhow!("XMP 属性解码失败：{err}"))?;
 
         if key.starts_with("xmlns:") || key == "xmlns" {
             declared.push(key.trim_start_matches("xmlns:").to_string());
@@ -274,10 +276,10 @@ fn rebuild_desc_start(e: &BytesStart, edit: &XmpEdit) -> Result<BytesStart<'stat
 
     // 补齐本次会用到、但尚未声明的命名空间
     for prefix in edit.used_prefixes() {
-        if !declared.iter().any(|d| d == prefix) {
-            if let Some(uri) = namespace_uri(prefix) {
-                start.push_attribute((format!("xmlns:{prefix}").as_str(), uri));
-            }
+        if !declared.iter().any(|d| d == prefix)
+            && let Some(uri) = namespace_uri(prefix)
+        {
+            start.push_attribute((format!("xmlns:{prefix}").as_str(), uri));
         }
     }
 
@@ -417,7 +419,10 @@ pub fn find_jpeg_xmp(bytes: &[u8]) -> Option<(usize, usize, Vec<u8>)> {
 pub fn set_jpeg_xmp(bytes: &mut Vec<u8>, packet: &str) -> Result<()> {
     let content_len = XMP_SIG.len() + packet.len();
     if content_len + 2 > 0xFFFF {
-        bail!("XMP 数据过大（{} 字节），暂不支持扩展 XMP 分段写入", packet.len());
+        bail!(
+            "XMP 数据过大（{} 字节），暂不支持扩展 XMP 分段写入",
+            packet.len()
+        );
     }
     let seg_len = (content_len + 2) as u16;
     let mut segment = Vec::with_capacity(content_len + 4);
@@ -668,7 +673,7 @@ fn qname_string(q: QName) -> String {
 }
 
 fn remember(done: &mut Vec<String>, name: String) {
-    if !done.iter().any(|d| *d == name) {
+    if !done.contains(&name) {
         done.push(name);
     }
 }
@@ -681,7 +686,10 @@ mod tests {
         XmpEdit {
             sets: vec![
                 ("xmp:Rating".into(), XmpValue::Simple("5".into())),
-                ("dc:creator".into(), XmpValue::Seq(vec!["张三".into(), "李四".into()])),
+                (
+                    "dc:creator".into(),
+                    XmpValue::Seq(vec!["张三".into(), "李四".into()]),
+                ),
             ],
             removes: vec![],
         }
@@ -697,7 +705,11 @@ mod tests {
         // 可被再次解析
         let props = read_properties(&pkt);
         assert!(props.iter().any(|(k, v)| k == "xmp:Rating" && v == "5"));
-        assert!(props.iter().any(|(k, v)| k == "dc:creator" && v == "张三; 李四"));
+        assert!(
+            props
+                .iter()
+                .any(|(k, v)| k == "dc:creator" && v == "张三; 李四")
+        );
     }
 
     #[test]
@@ -728,7 +740,10 @@ mod tests {
             <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
             <rdf:Description rdf:about=\"\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmp:Rating=\"3\"/>\
             </rdf:RDF></x:xmpmeta>";
-        let edit = XmpEdit { sets: vec![], removes: vec!["xmp:Rating".into()] };
+        let edit = XmpEdit {
+            sets: vec![],
+            removes: vec!["xmp:Rating".into()],
+        };
         let out = apply(Some(original), &edit).unwrap();
         assert!(!out.contains("Rating=\"3\""));
         assert!(!out.contains("xmp:Rating"));
@@ -754,7 +769,7 @@ mod tests {
         // 最小 PNG：签名 + IHDR + IDAT + IEND
         let mut png = Vec::new();
         png.extend_from_slice(&PNG_SIG);
-        let mut chunk = |ctype: &[u8], data: &[u8], out: &mut Vec<u8>| {
+        let chunk = |ctype: &[u8], data: &[u8], out: &mut Vec<u8>| {
             out.extend_from_slice(&(data.len() as u32).to_be_bytes());
             let mut td = Vec::new();
             td.extend_from_slice(ctype);
@@ -772,7 +787,10 @@ mod tests {
         let (_, _, packet) = find_png_xmp(&png).unwrap();
         assert_eq!(packet, b"<x>hi</x>");
         // XMP 应插在 IDAT 之前，且 IDAT 仍在
-        assert_eq!(png.windows(4).filter(|w| *w == b"IDAT").count(), idat_before);
+        assert_eq!(
+            png.windows(4).filter(|w| *w == b"IDAT").count(),
+            idat_before
+        );
         assert!(remove_png_xmp(&mut png));
         assert!(find_png_xmp(&png).is_none());
         assert_eq!(&png[0..8], &PNG_SIG);

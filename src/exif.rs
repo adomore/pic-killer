@@ -8,7 +8,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::NaiveDateTime;
 use little_exif::endian::Endian;
 use little_exif::exif_tag::ExifTag;
@@ -51,8 +51,8 @@ pub fn commit_raw(path: &Path, data: &[u8], opts: &WriteOpts) -> Result<()> {
 
 /// 把（已修改的）元数据对象原子写回文件。
 pub fn commit_metadata(path: &Path, metadata: &Metadata, opts: &WriteOpts) -> Result<()> {
-    let file_type = get_file_type(path)
-        .with_context(|| format!("不支持的文件类型：{}", path.display()))?;
+    let file_type =
+        get_file_type(path).with_context(|| format!("不支持的文件类型：{}", path.display()))?;
     if opts.dry_run {
         return Ok(());
     }
@@ -65,8 +65,8 @@ pub fn commit_metadata(path: &Path, metadata: &Metadata, opts: &WriteOpts) -> Re
 
 /// 清除文件的全部元数据（隐私清理）。
 pub fn strip_all(path: &Path, opts: &WriteOpts) -> Result<()> {
-    let file_type = get_file_type(path)
-        .with_context(|| format!("不支持的文件类型：{}", path.display()))?;
+    let file_type =
+        get_file_type(path).with_context(|| format!("不支持的文件类型：{}", path.display()))?;
     if opts.dry_run {
         return Ok(());
     }
@@ -200,8 +200,7 @@ pub fn orientation_tag(spec: &str) -> Result<ExifTag> {
 
 /// 从 metadata 删除某个命名标签，返回是否删除了内容。
 pub fn remove_named(metadata: &mut Metadata, name: &str) -> Result<bool> {
-    let template =
-        tag_template(name).with_context(|| format!("不支持删除的标签名 `{name}`"))?;
+    let template = tag_template(name).with_context(|| format!("不支持删除的标签名 `{name}`"))?;
     let removed = metadata.remove_tag_by_hex_group(template.as_u16(), template.get_group());
     Ok(removed > 0)
 }
@@ -249,15 +248,19 @@ pub fn read_gps(metadata: &Metadata) -> Option<GpsFix> {
     }
     let mut lat = dms_to_decimal(&lat_dms);
     let mut lon = dms_to_decimal(&lon_dms);
-    if let Some(r) = metadata.get_tag(&ExifTag::GPSLatitudeRef(String::new())).next() {
-        if string_value(r).starts_with('S') {
-            lat = -lat;
-        }
+    if let Some(r) = metadata
+        .get_tag(&ExifTag::GPSLatitudeRef(String::new()))
+        .next()
+        && string_value(r).starts_with('S')
+    {
+        lat = -lat;
     }
-    if let Some(r) = metadata.get_tag(&ExifTag::GPSLongitudeRef(String::new())).next() {
-        if string_value(r).starts_with('W') {
-            lon = -lon;
-        }
+    if let Some(r) = metadata
+        .get_tag(&ExifTag::GPSLongitudeRef(String::new()))
+        .next()
+        && string_value(r).starts_with('W')
+    {
+        lon = -lon;
     }
     let alt = gps_rationals(metadata, &ExifTag::GPSAltitude(Vec::new()))
         .and_then(|v| v.first().copied())
@@ -480,7 +483,10 @@ pub fn list_tags(metadata: &Metadata) -> Vec<TagView> {
         let group = group_name(ifd.get_ifd_type()).to_string();
         for tag in ifd.get_tags() {
             // 跳过内部使用的偏移量指针，对用户无意义
-            if matches!(tag, ExifTag::ExifOffset(_) | ExifTag::GPSInfo(_) | ExifTag::InteropOffset(_)) {
+            if matches!(
+                tag,
+                ExifTag::ExifOffset(_) | ExifTag::GPSInfo(_) | ExifTag::InteropOffset(_)
+            ) {
                 continue;
             }
             out.push(TagView {
@@ -534,17 +540,29 @@ pub fn format_value(tag: &ExifTag, endian: &Endian) -> String {
     let bytes = tag.value_as_u8_vec(endian);
     let little = matches!(endian, Endian::Little);
     let bpc = fmt.bytes_per_component() as usize;
-    let n = if bpc > 0 { bytes.len() / bpc } else { 0 };
+    let n = bytes.len().checked_div(bpc).unwrap_or(0);
 
     let items: Vec<String> = match fmt {
         ExifTagFormat::INT8U => bytes.iter().map(|b| b.to_string()).collect(),
         ExifTagFormat::INT8S => bytes.iter().map(|b| (*b as i8).to_string()).collect(),
-        ExifTagFormat::INT16U => (0..n).map(|i| read_u16(&bytes[i * 2..], little).to_string()).collect(),
-        ExifTagFormat::INT16S => (0..n).map(|i| read_i16(&bytes[i * 2..], little).to_string()).collect(),
-        ExifTagFormat::INT32U => (0..n).map(|i| read_u32(&bytes[i * 4..], little).to_string()).collect(),
-        ExifTagFormat::INT32S => (0..n).map(|i| read_i32(&bytes[i * 4..], little).to_string()).collect(),
-        ExifTagFormat::FLOAT => (0..n).map(|i| read_f32(&bytes[i * 4..], little).to_string()).collect(),
-        ExifTagFormat::DOUBLE => (0..n).map(|i| read_f64(&bytes[i * 8..], little).to_string()).collect(),
+        ExifTagFormat::INT16U => (0..n)
+            .map(|i| read_u16(&bytes[i * 2..], little).to_string())
+            .collect(),
+        ExifTagFormat::INT16S => (0..n)
+            .map(|i| read_i16(&bytes[i * 2..], little).to_string())
+            .collect(),
+        ExifTagFormat::INT32U => (0..n)
+            .map(|i| read_u32(&bytes[i * 4..], little).to_string())
+            .collect(),
+        ExifTagFormat::INT32S => (0..n)
+            .map(|i| read_i32(&bytes[i * 4..], little).to_string())
+            .collect(),
+        ExifTagFormat::FLOAT => (0..n)
+            .map(|i| read_f32(&bytes[i * 4..], little).to_string())
+            .collect(),
+        ExifTagFormat::DOUBLE => (0..n)
+            .map(|i| read_f64(&bytes[i * 8..], little).to_string())
+            .collect(),
         ExifTagFormat::RATIONAL64U => (0..n)
             .map(|i| {
                 let num = read_u32(&bytes[i * 8..], little);
@@ -590,33 +608,60 @@ fn format_undef(bytes: &[u8]) -> String {
         .iter()
         .all(|&b| b == 0 || (0x20..=0x7e).contains(&b) || b >= 0x80);
     if printable && !body.is_empty() {
-        String::from_utf8_lossy(body).trim_end_matches('\0').trim().to_string()
+        String::from_utf8_lossy(body)
+            .trim_end_matches('\0')
+            .trim()
+            .to_string()
     } else {
         format!("<{} 字节>", bytes.len())
     }
 }
 
 fn read_u16(b: &[u8], little: bool) -> u16 {
-    if little { u16::from_le_bytes([b[0], b[1]]) } else { u16::from_be_bytes([b[0], b[1]]) }
+    if little {
+        u16::from_le_bytes([b[0], b[1]])
+    } else {
+        u16::from_be_bytes([b[0], b[1]])
+    }
 }
 fn read_i16(b: &[u8], little: bool) -> i16 {
-    if little { i16::from_le_bytes([b[0], b[1]]) } else { i16::from_be_bytes([b[0], b[1]]) }
+    if little {
+        i16::from_le_bytes([b[0], b[1]])
+    } else {
+        i16::from_be_bytes([b[0], b[1]])
+    }
 }
 fn read_u32(b: &[u8], little: bool) -> u32 {
     let a = [b[0], b[1], b[2], b[3]];
-    if little { u32::from_le_bytes(a) } else { u32::from_be_bytes(a) }
+    if little {
+        u32::from_le_bytes(a)
+    } else {
+        u32::from_be_bytes(a)
+    }
 }
 fn read_i32(b: &[u8], little: bool) -> i32 {
     let a = [b[0], b[1], b[2], b[3]];
-    if little { i32::from_le_bytes(a) } else { i32::from_be_bytes(a) }
+    if little {
+        i32::from_le_bytes(a)
+    } else {
+        i32::from_be_bytes(a)
+    }
 }
 fn read_f32(b: &[u8], little: bool) -> f32 {
     let a = [b[0], b[1], b[2], b[3]];
-    if little { f32::from_le_bytes(a) } else { f32::from_be_bytes(a) }
+    if little {
+        f32::from_le_bytes(a)
+    } else {
+        f32::from_be_bytes(a)
+    }
 }
 fn read_f64(b: &[u8], little: bool) -> f64 {
     let a = [b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]];
-    if little { f64::from_le_bytes(a) } else { f64::from_be_bytes(a) }
+    if little {
+        f64::from_le_bytes(a)
+    } else {
+        f64::from_be_bytes(a)
+    }
 }
 
 // ============================ 落盘内部实现 ============================
@@ -668,8 +713,8 @@ fn atomic_replace(path: &Path, data: &[u8]) -> Result<()> {
     };
 
     {
-        let mut f = File::create(&tmp)
-            .with_context(|| format!("创建临时文件失败：{}", tmp.display()))?;
+        let mut f =
+            File::create(&tmp).with_context(|| format!("创建临时文件失败：{}", tmp.display()))?;
         f.write_all(data)?;
         f.sync_all()?;
     }
@@ -723,7 +768,10 @@ mod tests {
     #[test]
     fn rotate_180_twice_is_identity() {
         for start in 1..=8u16 {
-            let twice = compose_orientation(compose_orientation(start, RotateOp::Rot180), RotateOp::Rot180);
+            let twice = compose_orientation(
+                compose_orientation(start, RotateOp::Rot180),
+                RotateOp::Rot180,
+            );
             assert_eq!(twice, start);
         }
     }
@@ -731,9 +779,11 @@ mod tests {
     #[test]
     fn flip_twice_is_identity() {
         for start in 1..=8u16 {
-            let h = compose_orientation(compose_orientation(start, RotateOp::FlipH), RotateOp::FlipH);
+            let h =
+                compose_orientation(compose_orientation(start, RotateOp::FlipH), RotateOp::FlipH);
             assert_eq!(h, start);
-            let v = compose_orientation(compose_orientation(start, RotateOp::FlipV), RotateOp::FlipV);
+            let v =
+                compose_orientation(compose_orientation(start, RotateOp::FlipV), RotateOp::FlipV);
             assert_eq!(v, start);
         }
     }

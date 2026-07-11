@@ -6,7 +6,7 @@
 //! 写入时保留 0x0404 以外的其它 8BIM 块（缩略图、色彩配置等），只替换 IPTC 块；
 //! 字符集统一按 UTF-8 处理并写入 1:90 CodedCharacterSet 标记（ESC % G）。
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 const PS_SIG: &[u8] = b"Photoshop 3.0\0"; // 14 字节
 const IPTC_ID: u16 = 0x0404;
@@ -82,12 +82,15 @@ pub fn field_name(record: u8, number: u8) -> String {
 
 /// CLI 字段名 → (record, dataset)。
 pub fn resolve_field(name: &str) -> Option<(u8, u8)> {
-    let canon = name.trim().to_ascii_lowercase().replace(['-', '_', ' '], "");
+    let canon = name
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['-', '_', ' '], "");
     // 也接受 "2:105" 形式
-    if let Some((r, d)) = canon.split_once(':') {
-        if let (Ok(r), Ok(d)) = (r.parse::<u8>(), d.parse::<u8>()) {
-            return Some((r, d));
-        }
+    if let Some((r, d)) = canon.split_once(':')
+        && let (Ok(r), Ok(d)) = (r.parse::<u8>(), d.parse::<u8>())
+    {
+        return Some((r, d));
     }
     Some(match canon.as_str() {
         "title" | "objectname" => (2, 5),
@@ -183,7 +186,7 @@ fn parse_iim(d: &[u8]) -> Vec<Dataset> {
 fn serialize_iim(datasets: &[Dataset]) -> Vec<u8> {
     let mut sorted = datasets.to_vec();
     // 稳定排序：按 record、number 升序，同号内保持插入顺序（可重复字段）
-    sorted.sort_by(|a, b| (a.record, a.number).cmp(&(b.record, b.number)));
+    sorted.sort_by_key(|a| (a.record, a.number));
 
     let mut out = Vec::new();
     for ds in &sorted {
@@ -392,7 +395,10 @@ fn write_app13(bytes: &mut Vec<u8>, irbs: &[Irb]) -> Result<()> {
 
     let seg_len = payload.len() + 2;
     if seg_len > 0xFFFF {
-        bail!("IPTC/APP13 数据过大（{} 字节），暂不支持分段写入", payload.len());
+        bail!(
+            "IPTC/APP13 数据过大（{} 字节），暂不支持分段写入",
+            payload.len()
+        );
     }
     let mut segment = Vec::with_capacity(payload.len() + 4);
     segment.push(0xFF);
@@ -416,7 +422,11 @@ mod tests {
     use super::*;
 
     fn ds(record: u8, number: u8, s: &str) -> Dataset {
-        Dataset { record, number, data: s.as_bytes().to_vec() }
+        Dataset {
+            record,
+            number,
+            data: s.as_bytes().to_vec(),
+        }
     }
 
     #[test]
@@ -433,8 +443,16 @@ mod tests {
     #[test]
     fn irb_roundtrip_preserves_others() {
         let irbs = vec![
-            Irb { id: 0x0404, name: vec![], data: vec![1, 2, 3] },      // IPTC（奇数长度→需补齐）
-            Irb { id: 0x040C, name: vec![], data: vec![9, 9, 9, 9] },   // 缩略图（占位）
+            Irb {
+                id: 0x0404,
+                name: vec![],
+                data: vec![1, 2, 3],
+            }, // IPTC（奇数长度→需补齐）
+            Irb {
+                id: 0x040C,
+                name: vec![],
+                data: vec![9, 9, 9, 9],
+            }, // 缩略图（占位）
         ];
         let bytes = serialize_irbs(&irbs);
         let parsed = parse_irbs(&bytes);
@@ -449,29 +467,49 @@ mod tests {
     fn apply_sets_removes_and_adds_charset() {
         let existing = vec![ds(2, 5, "Old"), ds(2, 116, "Copyright")];
         let edit = IptcEdit {
-            sets: vec![(2, 5, vec!["New".into()]), (2, 25, vec!["a".into(), "b".into()])],
+            sets: vec![
+                (2, 5, vec!["New".into()]),
+                (2, 25, vec!["a".into(), "b".into()]),
+            ],
             removes: vec![(2, 116)],
         };
         let out = apply(&existing, &edit);
         // 旧标题被替换
-        assert!(out.iter().any(|d| d.record == 2 && d.number == 5 && d.data == b"New"));
+        assert!(
+            out.iter()
+                .any(|d| d.record == 2 && d.number == 5 && d.data == b"New")
+        );
         assert!(!out.iter().any(|d| d.data == b"Old"));
         // 版权被删
         assert!(!out.iter().any(|d| d.record == 2 && d.number == 116));
         // 关键词两条
-        assert_eq!(out.iter().filter(|d| d.record == 2 && d.number == 25).count(), 2);
+        assert_eq!(
+            out.iter()
+                .filter(|d| d.record == 2 && d.number == 25)
+                .count(),
+            2
+        );
         // UTF-8 字符集标记已加
-        assert!(out.iter().any(|d| d.record == 1 && d.number == 90 && d.data == CHARSET_UTF8));
+        assert!(
+            out.iter()
+                .any(|d| d.record == 1 && d.number == 90 && d.data == CHARSET_UTF8)
+        );
     }
 
     #[test]
     fn app13_segment_roundtrip() {
         let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00, 0xFF, 0xD9];
         assert!(read_datasets(&jpeg).is_empty());
-        let datasets = apply(&[], &IptcEdit {
-            sets: vec![(2, 5, vec!["测试标题".into()]), (2, 25, vec!["关键词".into()])],
-            removes: vec![],
-        });
+        let datasets = apply(
+            &[],
+            &IptcEdit {
+                sets: vec![
+                    (2, 5, vec!["测试标题".into()]),
+                    (2, 25, vec!["关键词".into()]),
+                ],
+                removes: vec![],
+            },
+        );
         set_jpeg_iptc(&mut jpeg, &datasets).unwrap();
         let props = read_properties(&jpeg);
         assert!(props.iter().any(|(k, v)| k == "Title" && v == "测试标题"));
@@ -484,7 +522,11 @@ mod tests {
     fn set_preserves_other_irb() {
         // 构造一个含缩略图 IRB 的 APP13，再写 IPTC，缩略图应保留
         let mut jpeg = vec![0xFF, 0xD8];
-        let irbs = vec![Irb { id: 0x040C, name: vec![], data: vec![7; 10] }];
+        let irbs = vec![Irb {
+            id: 0x040C,
+            name: vec![],
+            data: vec![7; 10],
+        }];
         let mut payload = PS_SIG.to_vec();
         payload.extend_from_slice(&serialize_irbs(&irbs));
         let seg_len = payload.len() + 2;
@@ -492,7 +534,13 @@ mod tests {
         jpeg.extend_from_slice(&payload);
         jpeg.extend_from_slice(&[0xFF, 0xD9]);
 
-        let datasets = apply(&[], &IptcEdit { sets: vec![(2, 5, vec!["T".into()])], removes: vec![] });
+        let datasets = apply(
+            &[],
+            &IptcEdit {
+                sets: vec![(2, 5, vec!["T".into()])],
+                removes: vec![],
+            },
+        );
         set_jpeg_iptc(&mut jpeg, &datasets).unwrap();
 
         let (_, _, payload) = find_app13(&jpeg).unwrap();

@@ -1,6 +1,6 @@
 //! 时间解析与运算：绝对时间解析、相对偏移量（Delta）解析、EXIF 时间格式化。
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{Duration, Months, NaiveDateTime};
 
 /// EXIF 时间字段的标准格式：`YYYY:MM:DD HH:MM:SS`
@@ -180,9 +180,30 @@ mod tests {
 
     #[test]
     fn delta_basic() {
-        assert_eq!(parse_delta("+2h").unwrap(), Delta { months: 0, days: 0, seconds: 7200 });
-        assert_eq!(parse_delta("-3d").unwrap(), Delta { months: 0, days: -3, seconds: 0 });
-        assert_eq!(parse_delta("30m").unwrap(), Delta { months: 0, days: 0, seconds: 1800 });
+        assert_eq!(
+            parse_delta("+2h").unwrap(),
+            Delta {
+                months: 0,
+                days: 0,
+                seconds: 7200
+            }
+        );
+        assert_eq!(
+            parse_delta("-3d").unwrap(),
+            Delta {
+                months: 0,
+                days: -3,
+                seconds: 0
+            }
+        );
+        assert_eq!(
+            parse_delta("30m").unwrap(),
+            Delta {
+                months: 0,
+                days: 0,
+                seconds: 1800
+            }
+        );
     }
 
     #[test]
@@ -207,13 +228,19 @@ mod tests {
     #[test]
     fn delta_apply_month_end() {
         // 1月31日 + 1个月 = 2月28日（日历运算）
-        let r = parse_delta("+1mo").unwrap().apply(dt("2023-01-31 10:00:00")).unwrap();
+        let r = parse_delta("+1mo")
+            .unwrap()
+            .apply(dt("2023-01-31 10:00:00"))
+            .unwrap();
         assert_eq!(format_exif(&r), "2023:02:28 10:00:00");
     }
 
     #[test]
     fn delta_apply_seconds_cross_day() {
-        let r = parse_delta("+2h").unwrap().apply(dt("2024-01-01 23:00:00")).unwrap();
+        let r = parse_delta("+2h")
+            .unwrap()
+            .apply(dt("2024-01-01 23:00:00"))
+            .unwrap();
         assert_eq!(format_exif(&r), "2024:01:02 01:00:00");
     }
 
@@ -225,8 +252,14 @@ mod tests {
 
     #[test]
     fn parse_various_datetime_formats() {
-        assert_eq!(format_exif(&dt("2024-01-02 03:04:05")), "2024:01:02 03:04:05");
-        assert_eq!(format_exif(&dt("2024:01:02 03:04:05")), "2024:01:02 03:04:05");
+        assert_eq!(
+            format_exif(&dt("2024-01-02 03:04:05")),
+            "2024:01:02 03:04:05"
+        );
+        assert_eq!(
+            format_exif(&dt("2024:01:02 03:04:05")),
+            "2024:01:02 03:04:05"
+        );
         assert_eq!(format_exif(&dt("2024-01-02")), "2024:01:02 00:00:00");
         assert_eq!(format_exif(&dt("2024/01/02 03:04")), "2024:01:02 03:04:00");
     }
