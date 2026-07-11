@@ -118,6 +118,72 @@ fn print_summary(stats: &Stats, total: usize, dry_run: bool) {
     }
 }
 
+/// 创建进度条：仅在多文件且 stderr 是终端时显示（画在 stderr，不污染 stdout）。
+fn progress_bar(len: usize) -> indicatif::ProgressBar {
+    use std::io::IsTerminal;
+    if len > 1 && std::io::stderr().is_terminal() {
+        let pb = indicatif::ProgressBar::new(len as u64);
+        pb.set_style(
+            indicatif::ProgressStyle::with_template("  {bar:32} {pos}/{len} ({eta}) {msg}")
+                .unwrap()
+                .progress_chars("##-"),
+        );
+        pb
+    } else {
+        indicatif::ProgressBar::hidden()
+    }
+}
+
+/// 并行处理一批文件，带进度条；结果按原顺序打印，随后打印汇总。
+///
+/// `jobs`：0=rayon 默认（CPU 核数），1=顺序，其它=指定线程数。
+/// 逐文件写入互不干扰（各写各的文件、临时文件名唯一），因此并行安全。
+fn run_batch<F>(files: &[std::path::PathBuf], write: &WriteArgs, process: F) -> Stats
+where
+    F: Fn(usize, &Path) -> Outcome + Sync,
+{
+    use rayon::prelude::*;
+
+    let pb = progress_bar(files.len());
+    let run = || {
+        files
+            .par_iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let o = process(i, p);
+                pb.inc(1);
+                o
+            })
+            .collect::<Vec<Outcome>>()
+    };
+
+    let results: Vec<Outcome> = match write.jobs {
+        1 => files
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let o = process(i, p);
+                pb.inc(1);
+                o
+            })
+            .collect(),
+        0 => run(),
+        n => match rayon::ThreadPoolBuilder::new().num_threads(n).build() {
+            Ok(pool) => pool.install(run),
+            Err(_) => run(),
+        },
+    };
+    pb.finish_and_clear();
+
+    let mut stats = Stats::default();
+    for (path, outcome) in files.iter().zip(results.iter()) {
+        tally(&mut stats, outcome);
+        print_outcome(path, outcome, write.verbose);
+    }
+    print_summary(&stats, files.len(), write.dry_run);
+    stats
+}
+
 /// 解析 --tags 时间字段列表。
 fn parse_time_tags(s: &str) -> Result<TagSelection> {
     let mut sel = TagSelection {
@@ -184,15 +250,9 @@ pub fn time(args: TimeArgs) -> Result<usize> {
     println!();
 
     let opts = write_opts(&args.write, !args.also_file_time);
-    let mut stats = Stats::default();
-
-    for (i, path) in files.iter().enumerate() {
-        let outcome = process_time(path, i, &mode, sel, &opts, args.also_file_time);
-        tally(&mut stats, &outcome);
-        print_outcome(path, &outcome, args.write.verbose);
-    }
-
-    print_summary(&stats, files.len(), args.write.dry_run);
+    let stats = run_batch(&files, &args.write, |i, path| {
+        process_time(path, i, &mode, sel, &opts, args.also_file_time)
+    });
     Ok(stats.failed)
 }
 
@@ -645,13 +705,9 @@ pub fn rotate(args: RotateArgs) -> Result<usize> {
     println!();
 
     let opts = write_opts(&args.write, true);
-    let mut stats = Stats::default();
-    for path in &files {
-        let outcome = process_rotate(path, op, &opts);
-        tally(&mut stats, &outcome);
-        print_outcome(path, &outcome, args.write.verbose);
-    }
-    print_summary(&stats, files.len(), args.write.dry_run);
+    let stats = run_batch(&files, &args.write, |_, path| {
+        process_rotate(path, op, &opts)
+    });
     Ok(stats.failed)
 }
 
@@ -742,13 +798,9 @@ pub fn copy(args: CopyArgs) -> Result<usize> {
     println!();
 
     let opts = write_opts(&args.write, true);
-    let mut stats = Stats::default();
-    for path in &files {
-        let outcome = process_copy(path, &source, all, time, gps, &opts);
-        tally(&mut stats, &outcome);
-        print_outcome(path, &outcome, args.write.verbose);
-    }
-    print_summary(&stats, files.len(), args.write.dry_run);
+    let stats = run_batch(&files, &args.write, |_, path| {
+        process_copy(path, &source, all, time, gps, &opts)
+    });
     Ok(stats.failed)
 }
 
@@ -798,6 +850,7 @@ pub fn rename(args: RenameArgs) -> Result<usize> {
         dry_run: args.dry_run,
         yes: args.yes,
         verbose: args.verbose,
+        jobs: 1,
     };
     if !confirm_write(&write)? {
         println!("已取消。");
@@ -942,13 +995,9 @@ pub fn xmp(args: XmpArgs) -> Result<usize> {
     println!();
 
     let opts = write_opts(&args.write, true);
-    let mut stats = Stats::default();
-    for path in &files {
-        let outcome = process_xmp(path, &edit, args.clear, &opts);
-        tally(&mut stats, &outcome);
-        print_outcome(path, &outcome, args.write.verbose);
-    }
-    print_summary(&stats, files.len(), args.write.dry_run);
+    let stats = run_batch(&files, &args.write, |_, path| {
+        process_xmp(path, &edit, args.clear, &opts)
+    });
     Ok(stats.failed)
 }
 
@@ -1128,13 +1177,9 @@ pub fn iptc(args: IptcArgs) -> Result<usize> {
     println!();
 
     let opts = write_opts(&args.write, true);
-    let mut stats = Stats::default();
-    for path in &files {
-        let outcome = process_iptc(path, &edit, args.clear, &opts);
-        tally(&mut stats, &outcome);
-        print_outcome(path, &outcome, args.write.verbose);
-    }
-    print_summary(&stats, files.len(), args.write.dry_run);
+    let stats = run_batch(&files, &args.write, |_, path| {
+        process_iptc(path, &edit, args.clear, &opts)
+    });
     Ok(stats.failed)
 }
 
@@ -1265,6 +1310,7 @@ pub fn restore(args: RestoreArgs) -> Result<usize> {
         dry_run: args.dry_run,
         yes: args.yes,
         verbose: args.verbose,
+        jobs: 1,
     };
     if !confirm_write(&write)? {
         println!("已取消。");
@@ -1357,13 +1403,9 @@ pub fn geotag(args: GeotagArgs) -> Result<usize> {
     println!();
 
     let opts = write_opts(&args.write, true);
-    let mut stats = Stats::default();
-    for path in &files {
-        let outcome = process_geotag(path, &points, tz, offset, args.max_gap, &opts);
-        tally(&mut stats, &outcome);
-        print_outcome(path, &outcome, args.write.verbose);
-    }
-    print_summary(&stats, files.len(), args.write.dry_run);
+    let stats = run_batch(&files, &args.write, |_, path| {
+        process_geotag(path, &points, tz, offset, args.max_gap, &opts)
+    });
     Ok(stats.failed)
 }
 
@@ -1484,13 +1526,9 @@ pub fn set(args: SetArgs) -> Result<usize> {
     println!();
 
     let opts = write_opts(&args.write, true);
-    let mut stats = Stats::default();
-    for path in &files {
-        let outcome = process_set(path, &sets, &removes, &opts);
-        tally(&mut stats, &outcome);
-        print_outcome(path, &outcome, args.write.verbose);
-    }
-    print_summary(&stats, files.len(), args.write.dry_run);
+    let stats = run_batch(&files, &args.write, |_, path| {
+        process_set(path, &sets, &removes, &opts)
+    });
     Ok(stats.failed)
 }
 
@@ -1588,13 +1626,9 @@ pub fn gps(args: GpsArgs) -> Result<usize> {
     println!();
 
     let opts = write_opts(&args.write, true);
-    let mut stats = Stats::default();
-    for path in &files {
-        let outcome = process_gps(path, &args, &opts);
-        tally(&mut stats, &outcome);
-        print_outcome(path, &outcome, args.write.verbose);
-    }
-    print_summary(&stats, files.len(), args.write.dry_run);
+    let stats = run_batch(&files, &args.write, |_, path| {
+        process_gps(path, &args, &opts)
+    });
     Ok(stats.failed)
 }
 
@@ -1651,13 +1685,9 @@ pub fn strip(args: StripArgs) -> Result<usize> {
     println!();
 
     let opts = write_opts(&args.write, true);
-    let mut stats = Stats::default();
-    for path in &files {
-        let outcome = process_strip(path, args.gps, &opts);
-        tally(&mut stats, &outcome);
-        print_outcome(path, &outcome, args.write.verbose);
-    }
-    print_summary(&stats, files.len(), args.write.dry_run);
+    let stats = run_batch(&files, &args.write, |_, path| {
+        process_strip(path, args.gps, &opts)
+    });
     Ok(stats.failed)
 }
 

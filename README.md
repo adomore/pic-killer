@@ -92,12 +92,17 @@ pic-killer set  .\photos -r --where make=Canon --artist 张三   # 只改 Canon 
 | `名称=值` `名称!=值` | 标签值等于/不等于 |
 | `名称~值` `名称!~值` | 标签值包含/不包含 |
 
-会写入的子命令（`time`/`set`/`gps`/`strip`）还支持：
+会写入的子命令（`time`/`set`/`gps`/`strip`/`rotate`/`copy`/`xmp`/`iptc`/`geotag`）还支持：
 
 - `-n, --dry-run` 仅预览，不写入
 - `--backup` 处理前备份为 `<文件名>.bak`
 - `-y, --yes` 跳过确认提示
 - `-v, --verbose` 详细输出
+- `-j, --jobs <N>` 并行线程数（默认按 CPU 核数自动，`1`=顺序）
+
+> **并行处理 + 进度条**：这些命令默认多线程处理，大图库批量操作明显更快；
+> 在终端里会显示进度条（画在 stderr，不影响 `show --json/--csv` 等 stdout 输出）。
+> 逐文件写入互不干扰、结果仍按原顺序打印。
 
 ---
 

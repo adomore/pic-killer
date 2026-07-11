@@ -89,6 +89,10 @@ pub struct WriteArgs {
     /// 输出更详细的信息
     #[arg(short, long)]
     pub verbose: bool,
+
+    /// 并行线程数（0=按 CPU 核数自动，1=顺序处理）
+    #[arg(short = 'j', long, value_name = "N", default_value_t = 0)]
+    pub jobs: usize,
 }
 
 // ----------------------------- time -----------------------------
