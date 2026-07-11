@@ -33,6 +33,7 @@
 | [`geotag`](#geotag--gpx-地理标记) | 用 GPX 轨迹按拍摄时间批量地理标记（插值写 GPS） |
 | [`apply`](#apply--从-csv-导入) | 从 CSV 批量导入元数据并写回（表格里批量编辑的写回端） |
 | [`report`](#report--元数据统计) | 统计一批照片的元数据覆盖（拍摄时间/GPS/相机分布/时间跨度） |
+| `completions` | 生成 shell 补全脚本（bash/zsh/fish/powershell）或 man 手册页 |
 
 ## 下载安装
 
@@ -378,6 +379,19 @@ pic-killer report .\photos -r --where no-gps   # 也可配合 --where
 ```
 
 输出包含：总数、有/无拍摄时间、有/无 GPS、时间跨度、相机型号分布。
+
+## shell 补全 / man 手册
+
+```powershell
+# PowerShell：加入 $PROFILE
+pic-killer completions powershell | Out-String | Invoke-Expression
+```
+```bash
+# bash：写入补全目录
+pic-killer completions bash > /etc/bash_completion.d/pic-killer
+pic-killer completions --man > pic-killer.1        # man 手册页
+```
+支持 `bash` / `zsh` / `fish` / `powershell` / `elvish`。
 
 ---
 

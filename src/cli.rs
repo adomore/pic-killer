@@ -49,6 +49,8 @@ pub enum Command {
     Apply(ApplyArgs),
     /// 统计一批照片的元数据覆盖情况（拍摄时间/GPS/相机分布等）
     Report(ReportArgs),
+    /// 生成 shell 补全脚本或 man 手册页
+    Completions(CompletionsArgs),
 }
 
 /// 选择要处理的文件（所有子命令共用）。
@@ -529,4 +531,17 @@ pub struct ApplyArgs {
 pub struct ReportArgs {
     #[command(flatten)]
     pub target: TargetArgs,
+}
+
+// -------------------------- completions -------------------------
+
+#[derive(Args, Debug)]
+pub struct CompletionsArgs {
+    /// 目标 shell：bash / zsh / fish / powershell / elvish
+    #[arg(value_enum)]
+    pub shell: Option<clap_complete::Shell>,
+
+    /// 改为生成 man 手册页（roff 格式，重定向到 pic-killer.1）
+    #[arg(long)]
+    pub man: bool,
 }

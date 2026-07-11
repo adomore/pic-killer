@@ -8,8 +8,9 @@ use chrono::{DateTime, FixedOffset, Local, NaiveDateTime, TimeZone, Utc};
 use little_exif::exif_tag::ExifTag;
 
 use crate::cli::{
-    ApplyArgs, CopyArgs, GeotagArgs, GpsArgs, IptcArgs, RenameArgs, ReportArgs, RestoreArgs,
-    RotateArgs, SetArgs, ShowArgs, StripArgs, TargetArgs, TimeArgs, WriteArgs, XmpArgs,
+    ApplyArgs, CompletionsArgs, CopyArgs, GeotagArgs, GpsArgs, IptcArgs, RenameArgs, ReportArgs,
+    RestoreArgs, RotateArgs, SetArgs, ShowArgs, StripArgs, TargetArgs, TimeArgs, WriteArgs,
+    XmpArgs,
 };
 use crate::exif::{self, RotateOp, TagSelection, WriteOpts};
 use crate::gpx::{self, TrackPoint};
@@ -2200,6 +2201,23 @@ pub fn report(args: ReportArgs) -> Result<usize> {
         println!("    {name:<width$}  {count}");
     }
 
+    Ok(0)
+}
+
+// ============================ completions ============================
+
+pub fn completions(args: CompletionsArgs) -> Result<usize> {
+    use clap::CommandFactory;
+    let mut cmd = crate::cli::Cli::command();
+    if args.man {
+        clap_mangen::Man::new(cmd)
+            .render(&mut std::io::stdout())
+            .map_err(|e| anyhow::anyhow!("生成手册页失败：{e}"))?;
+    } else if let Some(shell) = args.shell {
+        clap_complete::generate(shell, &mut cmd, "pic-killer", &mut std::io::stdout());
+    } else {
+        bail!("请指定 shell（bash/zsh/fish/powershell/elvish）或加 --man");
+    }
     Ok(0)
 }
 

@@ -44,6 +44,7 @@ fn run() -> Result<()> {
         Command::Geotag(args) => commands::geotag(args)?,
         Command::Apply(args) => commands::apply(args)?,
         Command::Report(args) => commands::report(args)?,
+        Command::Completions(args) => commands::completions(args)?,
     };
 
     if failures > 0 {
