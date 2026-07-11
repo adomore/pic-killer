@@ -187,6 +187,9 @@ fn process_time(
     opts: &WriteOpts,
     also_file_time: bool,
 ) -> Outcome {
+    if let Some(hint) = exif::unsupported_hint(path) {
+        return Outcome::Skipped(hint);
+    }
     let mut metadata = match exif::load_metadata(path) {
         Ok(m) => m,
         Err(e) => return Outcome::Failed(format!("{e:#}")),
@@ -338,6 +341,10 @@ pub fn show(args: ShowArgs) -> Result<usize> {
             println!();
         }
         println!("=== {} ===", path.display());
+        if let Some(hint) = exif::unsupported_hint(path) {
+            println!("  {hint}");
+            continue;
+        }
         let metadata = match exif::load_metadata(path) {
             Ok(m) => m,
             Err(e) => {
@@ -401,7 +408,11 @@ pub fn show(args: ShowArgs) -> Result<usize> {
 fn show_json(files: &[std::path::PathBuf], filter: Option<&str>) -> Result<usize> {
     let mut failed = 0;
     let mut out = String::from("[\n");
-    for (idx, path) in files.iter().enumerate() {
+    let mut first = true;
+    for path in files {
+        if exif::unsupported_hint(path).is_some() {
+            continue;
+        }
         let metadata = match exif::load_metadata(path) {
             Ok(m) => m,
             Err(_) => {
@@ -409,9 +420,10 @@ fn show_json(files: &[std::path::PathBuf], filter: Option<&str>) -> Result<usize
                 continue;
             }
         };
-        if idx > 0 {
+        if !first {
             out.push_str(",\n");
         }
+        first = false;
         out.push_str("  {\n");
         out.push_str(&format!(
             "    \"file\": \"{}\",\n",
@@ -500,6 +512,9 @@ fn show_csv(files: &[std::path::PathBuf], filter: Option<&str>) -> Result<usize>
     let mut failed = 0;
     println!("file,group,name,hex,value");
     for path in files {
+        if exif::unsupported_hint(path).is_some() {
+            continue;
+        }
         let metadata = match exif::load_metadata(path) {
             Ok(m) => m,
             Err(_) => {
@@ -622,6 +637,9 @@ pub fn rotate(args: RotateArgs) -> Result<usize> {
 }
 
 fn process_rotate(path: &Path, op: RotateOp, opts: &WriteOpts) -> Outcome {
+    if let Some(hint) = exif::unsupported_hint(path) {
+        return Outcome::Skipped(hint);
+    }
     let mut metadata = match exif::load_metadata(path) {
         Ok(m) => m,
         Err(e) => return Outcome::Failed(format!("{e:#}")),
@@ -722,6 +740,9 @@ fn process_copy(
     gps: bool,
     opts: &WriteOpts,
 ) -> Outcome {
+    if let Some(hint) = exif::unsupported_hint(path) {
+        return Outcome::Skipped(hint);
+    }
     let mut metadata = match exif::load_metadata(path) {
         Ok(m) => m,
         Err(e) => return Outcome::Failed(format!("{e:#}")),
@@ -783,6 +804,9 @@ fn plan_rename(
     claimed: &mut std::collections::HashSet<std::path::PathBuf>,
     dry_run: bool,
 ) -> Outcome {
+    if let Some(hint) = exif::unsupported_hint(path) {
+        return Outcome::Skipped(hint);
+    }
     let metadata = match exif::load_metadata(path) {
         Ok(m) => m,
         Err(e) => return Outcome::Failed(format!("{e:#}")),
@@ -907,6 +931,9 @@ pub fn xmp(args: XmpArgs) -> Result<usize> {
 }
 
 fn process_xmp(path: &Path, edit: &XmpEdit, clear: bool, opts: &WriteOpts) -> Outcome {
+    if let Some(hint) = exif::unsupported_hint(path) {
+        return Outcome::Skipped(hint);
+    }
     let mut bytes = match std::fs::read(path) {
         Ok(b) => b,
         Err(e) => return Outcome::Failed(format!("读取失败：{e}")),
@@ -1089,6 +1116,9 @@ pub fn iptc(args: IptcArgs) -> Result<usize> {
 }
 
 fn process_iptc(path: &Path, edit: &IptcEdit, clear: bool, opts: &WriteOpts) -> Outcome {
+    if let Some(hint) = exif::unsupported_hint(path) {
+        return Outcome::Skipped(hint);
+    }
     let mut bytes = match std::fs::read(path) {
         Ok(b) => b,
         Err(e) => return Outcome::Failed(format!("读取失败：{e}")),
@@ -1221,6 +1251,9 @@ pub fn set(args: SetArgs) -> Result<usize> {
 }
 
 fn process_set(path: &Path, sets: &[ExifTag], removes: &[String], opts: &WriteOpts) -> Outcome {
+    if let Some(hint) = exif::unsupported_hint(path) {
+        return Outcome::Skipped(hint);
+    }
     let mut metadata = match exif::load_metadata(path) {
         Ok(m) => m,
         Err(e) => return Outcome::Failed(format!("{e:#}")),
@@ -1321,6 +1354,9 @@ pub fn gps(args: GpsArgs) -> Result<usize> {
 }
 
 fn process_gps(path: &Path, args: &GpsArgs, opts: &WriteOpts) -> Outcome {
+    if let Some(hint) = exif::unsupported_hint(path) {
+        return Outcome::Skipped(hint);
+    }
     let mut metadata = match exif::load_metadata(path) {
         Ok(m) => m,
         Err(e) => return Outcome::Failed(format!("{e:#}")),
@@ -1380,6 +1416,9 @@ pub fn strip(args: StripArgs) -> Result<usize> {
 }
 
 fn process_strip(path: &Path, gps_only: bool, opts: &WriteOpts) -> Outcome {
+    if let Some(hint) = exif::unsupported_hint(path) {
+        return Outcome::Skipped(hint);
+    }
     if gps_only {
         let mut metadata = match exif::load_metadata(path) {
             Ok(m) => m,

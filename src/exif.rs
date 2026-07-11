@@ -31,8 +31,23 @@ pub struct WriteOpts {
     pub preserve_fs_time: bool,
 }
 
+/// 对已知但没有标准元数据容器的格式（BMP、GIF 等）给出友好提示。
+/// 这类格式无法无损写入元数据，返回一句建议；其余返回 None。
+pub fn unsupported_hint(path: &Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    let msg = match ext.as_str() {
+        "bmp" => "BMP 无元数据容器，建议先转成 PNG 再处理",
+        "gif" => "GIF 不支持元数据编辑，建议先转成 PNG 再处理",
+        _ => return None,
+    };
+    Some(msg.to_string())
+}
+
 /// 读取文件元数据；若文件不含可解析的 EXIF 则返回空元数据对象。
 pub fn load_metadata(path: &Path) -> Result<Metadata> {
+    if let Some(hint) = unsupported_hint(path) {
+        bail!("{hint}");
+    }
     get_file_type(path).with_context(|| format!("不支持的文件类型：{}", path.display()))?;
     Ok(Metadata::new_from_path(path).unwrap_or_else(|_| Metadata::new()))
 }
@@ -65,6 +80,9 @@ pub fn commit_metadata(path: &Path, metadata: &Metadata, opts: &WriteOpts) -> Re
 
 /// 清除文件的全部元数据（隐私清理）。
 pub fn strip_all(path: &Path, opts: &WriteOpts) -> Result<()> {
+    if let Some(hint) = unsupported_hint(path) {
+        bail!("{hint}");
+    }
     let file_type =
         get_file_type(path).with_context(|| format!("不支持的文件类型：{}", path.display()))?;
     if opts.dry_run {
