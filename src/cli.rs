@@ -43,6 +43,8 @@ pub enum Command {
     Iptc(IptcArgs),
     /// 从 .bak 备份还原文件（撤销之前的修改）
     Restore(RestoreArgs),
+    /// 用 GPX 轨迹按拍摄时间批量地理标记（写 GPS）
+    Geotag(GeotagArgs),
 }
 
 /// 选择要处理的文件（所有子命令共用）。
@@ -465,4 +467,30 @@ pub struct RestoreArgs {
     /// 详细输出
     #[arg(short, long)]
     pub verbose: bool,
+}
+
+// ---------------------------- geotag ----------------------------
+
+#[derive(Args, Debug)]
+pub struct GeotagArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+    #[command(flatten)]
+    pub write: WriteArgs,
+
+    /// GPX 轨迹文件
+    #[arg(long, value_name = "文件")]
+    pub gpx: PathBuf,
+
+    /// 相机时钟的时区偏移，如 +08:00（默认按系统本地时区解释拍摄时间）
+    #[arg(long, value_name = "偏移", allow_hyphen_values = true)]
+    pub tz: Option<String>,
+
+    /// 额外时间偏移，修正相机时钟误差，如 -5m、+1h
+    #[arg(long, value_name = "偏移", allow_hyphen_values = true)]
+    pub offset: Option<String>,
+
+    /// 最大时间间隔（秒）：与轨迹点相差超过此值则不标记
+    #[arg(long, value_name = "秒", default_value_t = 600)]
+    pub max_gap: i64,
 }

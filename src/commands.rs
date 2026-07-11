@@ -4,14 +4,15 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use chrono::NaiveDateTime;
+use chrono::{DateTime, FixedOffset, Local, NaiveDateTime, TimeZone, Utc};
 use little_exif::exif_tag::ExifTag;
 
 use crate::cli::{
-    CopyArgs, GpsArgs, IptcArgs, RenameArgs, RestoreArgs, RotateArgs, SetArgs, ShowArgs, StripArgs,
-    TargetArgs, TimeArgs, WriteArgs, XmpArgs,
+    CopyArgs, GeotagArgs, GpsArgs, IptcArgs, RenameArgs, RestoreArgs, RotateArgs, SetArgs,
+    ShowArgs, StripArgs, TargetArgs, TimeArgs, WriteArgs, XmpArgs,
 };
 use crate::exif::{self, RotateOp, TagSelection, WriteOpts};
+use crate::gpx::{self, TrackPoint};
 use crate::iptc::{self, IptcEdit};
 use crate::namedate;
 use crate::scan;
@@ -1319,6 +1320,132 @@ fn process_restore(path: &Path, keep_backup: bool, dry_run: bool) -> Outcome {
         ),
         Err(e) => Outcome::Failed(format!("还原失败：{e}")),
     }
+}
+
+// ============================ geotag ============================
+
+pub fn geotag(args: GeotagArgs) -> Result<usize> {
+    let points = gpx::parse(&args.gpx)?;
+    if points.is_empty() {
+        bail!("GPX 中没有带时间戳的轨迹点：{}", args.gpx.display());
+    }
+    let tz = args.tz.as_deref().map(parse_tz).transpose()?;
+    let offset = args.offset.as_deref().map(parse_delta).transpose()?;
+
+    let files = collect(&args.target);
+    let files = apply_where(files, &args.target.where_expr)?;
+    if files.is_empty() {
+        println!("未找到符合条件的图片文件。");
+        return Ok(0);
+    }
+
+    println!("PIC-Killer · GPX 地理标记");
+    println!("  轨迹：{} 个点（{}）", points.len(), args.gpx.display());
+    println!("  时区：{}", args.tz.as_deref().unwrap_or("系统本地时区"));
+    if let Some(o) = &args.offset {
+        println!("  时间偏移：{o}");
+    }
+    println!("  最大间隔：{} 秒", args.max_gap);
+    println!("  文件：{} 个", files.len());
+    if args.write.dry_run {
+        println!("  模式：预览（不写入）");
+    }
+    if !confirm_write(&args.write)? {
+        println!("已取消。");
+        return Ok(0);
+    }
+    println!();
+
+    let opts = write_opts(&args.write, true);
+    let mut stats = Stats::default();
+    for path in &files {
+        let outcome = process_geotag(path, &points, tz, offset, args.max_gap, &opts);
+        tally(&mut stats, &outcome);
+        print_outcome(path, &outcome, args.write.verbose);
+    }
+    print_summary(&stats, files.len(), args.write.dry_run);
+    Ok(stats.failed)
+}
+
+fn process_geotag(
+    path: &Path,
+    points: &[TrackPoint],
+    tz: Option<FixedOffset>,
+    offset: Option<Delta>,
+    max_gap: i64,
+    opts: &WriteOpts,
+) -> Outcome {
+    if let Some(hint) = exif::unsupported_hint(path) {
+        return Outcome::Skipped(hint);
+    }
+    let mut metadata = match exif::load_metadata(path) {
+        Ok(m) => m,
+        Err(e) => return Outcome::Failed(format!("{e:#}")),
+    };
+    let capture = match exif::read_capture_time(&metadata).and_then(|s| parse_datetime(&s).ok()) {
+        Some(dt) => dt,
+        None => return Outcome::Skipped("无拍摄时间，无法地理标记".into()),
+    };
+    let adjusted = match offset {
+        Some(d) => match d.apply(capture) {
+            Some(x) => x,
+            None => return Outcome::Failed("时间偏移溢出".into()),
+        },
+        None => capture,
+    };
+    let utc = match photo_to_utc(adjusted, tz) {
+        Some(u) => u,
+        None => return Outcome::Skipped("拍摄时间无法解释为有效时刻（夏令时空档？）".into()),
+    };
+    let (lat, lon, ele) = match gpx::locate(points, utc, max_gap) {
+        Some(x) => x,
+        None => return Outcome::Skipped("轨迹中无匹配时段（超出 --max-gap）".into()),
+    };
+    for tag in exif::gps_tags(lat, lon, ele) {
+        metadata.set_tag(tag);
+    }
+    if let Err(e) = exif::commit_metadata(path, &metadata, opts) {
+        return Outcome::Failed(format!("{e:#}"));
+    }
+    Outcome::Changed(format!("{lat:.6}, {lon:.6}"))
+}
+
+/// 把（相机本地时区的）拍摄时间转换成 UTC。tz 为 None 时用系统本地时区。
+fn photo_to_utc(naive: NaiveDateTime, tz: Option<FixedOffset>) -> Option<DateTime<Utc>> {
+    match tz {
+        Some(off) => off
+            .from_local_datetime(&naive)
+            .single()
+            .map(|dt| dt.with_timezone(&Utc)),
+        None => Local
+            .from_local_datetime(&naive)
+            .single()
+            .map(|dt| dt.with_timezone(&Utc)),
+    }
+}
+
+/// 解析时区偏移，如 `+08:00`、`-05:00`、`+0800`、`+8`、`Z`。
+fn parse_tz(s: &str) -> Result<FixedOffset> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("z") || s.eq_ignore_ascii_case("utc") {
+        return Ok(FixedOffset::east_opt(0).expect("0 偏移合法"));
+    }
+    let (sign, rest) = if let Some(r) = s.strip_prefix('-') {
+        (-1, r)
+    } else {
+        (1, s.strip_prefix('+').unwrap_or(s))
+    };
+    let (h, m) = if let Some((h, m)) = rest.split_once(':') {
+        (h.to_string(), m.to_string())
+    } else if rest.len() == 4 {
+        (rest[..2].to_string(), rest[2..].to_string())
+    } else {
+        (rest.to_string(), "0".to_string())
+    };
+    let hh: i32 = h.parse().map_err(|_| anyhow::anyhow!("无效时区 `{s}`"))?;
+    let mm: i32 = m.parse().map_err(|_| anyhow::anyhow!("无效时区 `{s}`"))?;
+    let secs = sign * (hh * 3600 + mm * 60);
+    FixedOffset::east_opt(secs).context("时区偏移超出范围")
 }
 
 // ============================ set ============================

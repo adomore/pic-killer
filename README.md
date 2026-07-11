@@ -30,6 +30,7 @@
 | [`xmp`](#xmp--读写-xmp) | 读写 XMP：标题/描述/作者/评分/关键词/城市等（JPEG 与 PNG） |
 | [`iptc`](#iptc--读写-iptc-iim) | 读写旧版 IPTC-IIM：标题/说明/关键词/作者/城市/版权等（JPEG） |
 | [`restore`](#restore--从备份还原) | 从 `.bak` 备份还原文件，撤销之前的修改 |
+| [`geotag`](#geotag--gpx-地理标记) | 用 GPX 轨迹按拍摄时间批量地理标记（插值写 GPS） |
 
 ## 下载安装
 
@@ -290,6 +291,31 @@ pic-killer restore .\photos -r --dry-run
 ```
 
 没有 `.bak` 的文件会被跳过；还原是字节级的（`.bak` 就是原件的完整副本）。
+
+## `geotag` · GPX 地理标记
+
+用 GPS 轨迹（`.gpx`）按拍摄时间给照片批量补 GPS——手机/手表录轨迹，相机没定位时的经典工作流。
+按每张照片的拍摄时刻在轨迹里**线性插值**出经纬度（和海拔）。
+
+```powershell
+# 相机是北京时间，轨迹是 UTC：用 --tz 指明相机时区
+pic-killer geotag .\photos -r --gpx .\track.gpx --tz +08:00
+
+# 只给「还没有 GPS」的照片补（配合 --where）
+pic-killer geotag .\photos -r --gpx .\track.gpx --tz +08:00 --where no-gps
+
+# 相机时钟慢了 30 秒？用 --offset 修正
+pic-killer geotag .\photos --gpx .\track.gpx --offset +30s
+```
+
+选项：
+- `--gpx <文件>` GPX 轨迹（必填）
+- `--tz <偏移>` 相机时钟的时区，如 `+08:00`（默认按**系统本地时区**解释拍摄时间）
+- `--offset <偏移>` 额外时间偏移，修正相机时钟误差，如 `-5m`
+- `--max-gap <秒>` 与最近轨迹点相差超过此值则不标记（默认 600）
+
+> 拍摄时间是本地时间、GPX 时间通常是 UTC，两者需对齐——所以 `--tz` 很关键。
+> 无拍摄时间、或落在轨迹空档（超 `--max-gap`）的照片会被安全跳过。
 
 ---
 

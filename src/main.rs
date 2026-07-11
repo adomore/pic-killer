@@ -6,6 +6,7 @@
 mod cli;
 mod commands;
 mod exif;
+mod gpx;
 mod iptc;
 mod namedate;
 mod scan;
@@ -40,6 +41,7 @@ fn run() -> Result<()> {
         Command::Xmp(args) => commands::xmp(args)?,
         Command::Iptc(args) => commands::iptc(args)?,
         Command::Restore(args) => commands::restore(args)?,
+        Command::Geotag(args) => commands::geotag(args)?,
     };
 
     if failures > 0 {
