@@ -7,6 +7,7 @@
 //! 从而**保留所有未知的 XMP 属性和结构**，只增改用户指定的那几个。
 
 use std::io::Write as _;
+use std::path::Path;
 
 use anyhow::{Result, bail};
 use quick_xml::escape::escape;
@@ -666,6 +667,32 @@ pub fn remove_packet(bytes: &mut Vec<u8>) -> bool {
 /// 该容器是否支持 XMP。
 pub fn supports_xmp(bytes: &[u8]) -> bool {
     is_jpeg(bytes) || is_png(bytes)
+}
+
+// ============================ Sidecar (.xmp) ============================
+
+/// 某文件对应的 sidecar XMP 写入路径（`<主干>.xmp`，Adobe/Lightroom 约定）。
+/// 例：`photo.CR2` → `photo.xmp`。
+pub fn sidecar_path(image: &Path) -> std::path::PathBuf {
+    image.with_extension("xmp")
+}
+
+/// 读取 sidecar XMP 文本：先查 `<主干>.xmp`，再查 `<全名>.xmp`（exiftool 约定）。
+pub fn read_sidecar(image: &Path) -> Option<String> {
+    let mut candidates = vec![image.with_extension("xmp")];
+    if let Some(name) = image.file_name() {
+        let mut n = name.to_os_string();
+        n.push(".xmp");
+        candidates.push(image.with_file_name(n));
+    }
+    for p in candidates {
+        if p.is_file()
+            && let Ok(s) = std::fs::read_to_string(&p)
+        {
+            return Some(s.strip_prefix('\u{feff}').unwrap_or(&s).to_string());
+        }
+    }
+    None
 }
 
 fn qname_string(q: QName) -> String {

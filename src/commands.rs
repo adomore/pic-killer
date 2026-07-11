@@ -444,11 +444,26 @@ pub fn show(args: ShowArgs) -> Result<usize> {
             println!("  {hint}");
             continue;
         }
+        let sidecar = filter_props(read_sidecar_props(path), filter.as_deref());
         let metadata = match exif::load_metadata(path) {
             Ok(m) => m,
             Err(e) => {
-                println!("  读取失败：{e:#}");
-                failed += 1;
+                // 图片本身读不了（如 RAW），但若有 sidecar .xmp 仍展示
+                if sidecar.is_empty() {
+                    println!("  读取失败：{e:#}");
+                    failed += 1;
+                } else {
+                    println!("  --- XMP (sidecar) ---");
+                    let w = sidecar
+                        .iter()
+                        .map(|(k, _)| k.len())
+                        .max()
+                        .unwrap_or(0)
+                        .min(28);
+                    for (k, v) in &sidecar {
+                        println!("  {k:<w$}  {v}");
+                    }
+                }
                 continue;
             }
         };
@@ -473,7 +488,7 @@ pub fn show(args: ShowArgs) -> Result<usize> {
         let xmp = filter_props(read_xmp_props(path), filter.as_deref());
         let iptc = filter_props(read_iptc_props(path), filter.as_deref());
 
-        if shown.is_empty() && xmp.is_empty() && iptc.is_empty() {
+        if shown.is_empty() && xmp.is_empty() && iptc.is_empty() && sidecar.is_empty() {
             println!("  (无匹配的元数据)");
             continue;
         }
@@ -482,6 +497,7 @@ pub fn show(args: ShowArgs) -> Result<usize> {
             .map(|t| t.name.len())
             .chain(xmp.iter().map(|(k, _)| k.len()))
             .chain(iptc.iter().map(|(k, _)| k.len()))
+            .chain(sidecar.iter().map(|(k, _)| k.len()))
             .max()
             .unwrap_or(0)
             .min(28);
@@ -497,6 +513,12 @@ pub fn show(args: ShowArgs) -> Result<usize> {
         if !iptc.is_empty() {
             println!("  --- IPTC ---");
             for (k, v) in &iptc {
+                println!("  {:<width$}  {}", k, v, width = width);
+            }
+        }
+        if !sidecar.is_empty() {
+            println!("  --- XMP (sidecar) ---");
+            for (k, v) in &sidecar {
                 println!("  {:<width$}  {}", k, v, width = width);
             }
         }
@@ -1016,13 +1038,23 @@ pub fn xmp(args: XmpArgs) -> Result<usize> {
     println!();
 
     let opts = write_opts(&args.write, true);
+    let sidecar = args.sidecar;
     let stats = run_batch(&files, &args.write, |_, path| {
-        process_xmp(path, &edit, args.clear, &opts)
+        process_xmp(path, &edit, args.clear, sidecar, &opts)
     });
     Ok(stats.failed)
 }
 
-fn process_xmp(path: &Path, edit: &XmpEdit, clear: bool, opts: &WriteOpts) -> Outcome {
+fn process_xmp(
+    path: &Path,
+    edit: &XmpEdit,
+    clear: bool,
+    sidecar: bool,
+    opts: &WriteOpts,
+) -> Outcome {
+    if sidecar {
+        return process_xmp_sidecar(path, edit, clear, opts);
+    }
     if let Some(hint) = exif::unsupported_hint(path) {
         return Outcome::Skipped(hint);
     }
@@ -1068,6 +1100,41 @@ fn process_xmp(path: &Path, edit: &XmpEdit, clear: bool, opts: &WriteOpts) -> Ou
         edit.sets.len(),
         edit.removes.len()
     ))
+}
+
+/// sidecar 模式：只读写 `<主干>.xmp`，完全不碰原图（因此支持 RAW 等任意文件）。
+fn process_xmp_sidecar(path: &Path, edit: &XmpEdit, clear: bool, opts: &WriteOpts) -> Outcome {
+    let scar = xmp::sidecar_path(path);
+    let name = scar
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    if clear {
+        if !scar.exists() {
+            return Outcome::Skipped("无 sidecar 可清除".into());
+        }
+        if opts.dry_run {
+            return Outcome::Changed(format!("将删除 {name}"));
+        }
+        return match std::fs::remove_file(&scar) {
+            Ok(()) => Outcome::Changed(format!("已删除 sidecar {name}")),
+            Err(e) => Outcome::Failed(format!("删除 sidecar 失败：{e}")),
+        };
+    }
+
+    let existing = xmp::read_sidecar(path);
+    let packet = match xmp::apply(existing.as_deref(), edit) {
+        Ok(p) => p,
+        Err(e) => return Outcome::Failed(format!("{e:#}")),
+    };
+    if opts.dry_run {
+        return Outcome::Changed(format!("将写入 sidecar {name}"));
+    }
+    match std::fs::write(&scar, packet) {
+        Ok(()) => Outcome::Changed(format!("已写入 sidecar {name}")),
+        Err(e) => Outcome::Failed(format!("写入 sidecar 失败：{e}")),
+    }
 }
 
 fn build_xmp_edit(a: &XmpArgs) -> Result<XmpEdit> {
@@ -1291,6 +1358,14 @@ fn read_iptc_props(path: &Path) -> Vec<(String, String)> {
     match std::fs::read(path) {
         Ok(bytes) => iptc::read_properties(&bytes),
         Err(_) => Vec::new(),
+    }
+}
+
+/// 读取 sidecar `.xmp` 里的属性（不存在则空）。
+fn read_sidecar_props(path: &Path) -> Vec<(String, String)> {
+    match xmp::read_sidecar(path) {
+        Some(pkt) => xmp::read_properties(&pkt),
+        None => Vec::new(),
     }
 }
 

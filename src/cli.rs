@@ -396,6 +396,10 @@ pub struct XmpArgs {
     /// 清除整个 XMP 包
     #[arg(long)]
     pub clear: bool,
+
+    /// 写入旁挂 sidecar 文件 <主干>.xmp（不改动原图，适用于 RAW）
+    #[arg(long)]
+    pub sidecar: bool,
 }
 
 // ----------------------------- iptc -----------------------------

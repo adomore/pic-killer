@@ -265,6 +265,15 @@ pic-killer xmp .\photos -r --clear
 专用选项：`--title` `--description` `--creator`(可重复) `--rights` `--rating`(0-5)
 `--label` `--keywords`(逗号分隔) `--city` `--country`。查看用 `show`（会额外列出 XMP 段）。
 
+**Sidecar `.xmp`（支持 RAW）**：加 `--sidecar` 就写到旁挂的 `<主干>.xmp` 文件、**完全不碰原图**。
+因为不解析原文件，所以连 `little_exif` 不认识的 RAW（CR2/NEF/ARW 等）也能写——正是 Lightroom/darktable
+读取的那个 sidecar。`show` 会自动读取并显示 sidecar（原图读不了时也显示）。
+
+```powershell
+pic-killer xmp shot.CR2 --sidecar --title 日出 --rating 5   # 生成 shot.xmp，不动 CR2
+pic-killer xmp shot.CR2 --sidecar --clear                    # 删除 shot.xmp
+```
+
 ## `iptc` · 读写 IPTC-IIM
 
 读写旧版 **IPTC-IIM** 元数据（存于 JPEG 的 APP13 / Photoshop 8BIM 块，新闻/图库工作流常用）。
