@@ -29,6 +29,7 @@
 | [`rename`](#rename--按时间重命名) | 按拍摄时间批量重命名文件（`--from-name` 的逆操作） |
 | [`xmp`](#xmp--读写-xmp) | 读写 XMP：标题/描述/作者/评分/关键词/城市等（JPEG 与 PNG） |
 | [`iptc`](#iptc--读写-iptc-iim) | 读写旧版 IPTC-IIM：标题/说明/关键词/作者/城市/版权等（JPEG） |
+| [`restore`](#restore--从备份还原) | 从 `.bak` 备份还原文件，撤销之前的修改 |
 
 ## 下载安装
 
@@ -247,6 +248,26 @@ pic-killer iptc .\photos -r --clear
 `--city` `--state` `--country` `--copyright` `--credit` `--source` `--instructions`。
 
 > EXIF、XMP、IPTC 三套元数据彼此独立，可并存于同一张 JPEG，本工具保证互不破坏。
+
+## `restore` · 从备份还原
+
+与 `--backup` 配套：把之前用 `--backup` 生成的 `<文件名>.bak` 还原回去，一键撤销修改。
+
+```powershell
+# 先带备份修改
+pic-killer set .\photo.jpg --artist 张三 --backup
+
+# 反悔了，一键还原（默认还原后移除 .bak）
+pic-killer restore .\photo.jpg
+
+# 保留 .bak 以便反复还原
+pic-killer restore .\photos -r --keep-backup
+
+# 先预览哪些文件有备份可还原
+pic-killer restore .\photos -r --dry-run
+```
+
+没有 `.bak` 的文件会被跳过；还原是字节级的（`.bak` 就是原件的完整副本）。
 
 ---
 

@@ -38,6 +38,7 @@ fn run() -> Result<()> {
         Command::Rename(args) => commands::rename(args)?,
         Command::Xmp(args) => commands::xmp(args)?,
         Command::Iptc(args) => commands::iptc(args)?,
+        Command::Restore(args) => commands::restore(args)?,
     };
 
     if failures > 0 {

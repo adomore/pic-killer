@@ -8,8 +8,8 @@ use chrono::NaiveDateTime;
 use little_exif::exif_tag::ExifTag;
 
 use crate::cli::{
-    CopyArgs, GpsArgs, IptcArgs, RenameArgs, RotateArgs, SetArgs, ShowArgs, StripArgs, TargetArgs,
-    TimeArgs, WriteArgs, XmpArgs,
+    CopyArgs, GpsArgs, IptcArgs, RenameArgs, RestoreArgs, RotateArgs, SetArgs, ShowArgs, StripArgs,
+    TargetArgs, TimeArgs, WriteArgs, XmpArgs,
 };
 use crate::exif::{self, RotateOp, TagSelection, WriteOpts};
 use crate::iptc::{self, IptcEdit};
@@ -1202,6 +1202,99 @@ fn read_iptc_props(path: &Path) -> Vec<(String, String)> {
     match std::fs::read(path) {
         Ok(bytes) => iptc::read_properties(&bytes),
         Err(_) => Vec::new(),
+    }
+}
+
+// ============================ restore ============================
+
+pub fn restore(args: RestoreArgs) -> Result<usize> {
+    let files = collect(&args.target);
+    if files.is_empty() {
+        println!("未找到符合条件的图片文件。");
+        return Ok(0);
+    }
+    let backups = files
+        .iter()
+        .filter(|p| exif::backup_path(p).exists())
+        .count();
+
+    println!("PIC-Killer · 从备份还原");
+    println!("  找到 .bak：{backups} / {} 个文件", files.len());
+    println!(
+        "  备份处理：{}",
+        if args.keep_backup {
+            "还原后保留 .bak"
+        } else {
+            "还原后移除 .bak"
+        }
+    );
+    if args.dry_run {
+        println!("  模式：预览（不操作）");
+    }
+    if backups == 0 {
+        println!("没有找到任何 .bak 备份，无需还原。");
+        return Ok(0);
+    }
+
+    let write = WriteArgs {
+        backup: false,
+        dry_run: args.dry_run,
+        yes: args.yes,
+        verbose: args.verbose,
+    };
+    if !confirm_write(&write)? {
+        println!("已取消。");
+        return Ok(0);
+    }
+    println!();
+
+    let mut stats = Stats::default();
+    for path in &files {
+        let outcome = process_restore(path, args.keep_backup, args.dry_run);
+        tally(&mut stats, &outcome);
+        print_outcome(path, &outcome, args.verbose);
+    }
+
+    println!();
+    let verb = if args.dry_run {
+        "将还原"
+    } else {
+        "已还原"
+    };
+    print!("{verb} {}", stats.changed);
+    if stats.skipped > 0 {
+        print!("，跳过 {}", stats.skipped);
+    }
+    if stats.failed > 0 {
+        print!("，失败 {}", stats.failed);
+    }
+    println!("，共 {} 个文件。", files.len());
+    Ok(stats.failed)
+}
+
+fn process_restore(path: &Path, keep_backup: bool, dry_run: bool) -> Outcome {
+    let bak = exif::backup_path(path);
+    if !bak.exists() {
+        return Outcome::Skipped("无 .bak 备份".into());
+    }
+    if dry_run {
+        return Outcome::Changed("将从 .bak 还原".into());
+    }
+    let result = if keep_backup {
+        std::fs::copy(&bak, path).map(|_| ())
+    } else {
+        std::fs::rename(&bak, path)
+    };
+    match result {
+        Ok(()) => Outcome::Changed(
+            if keep_backup {
+                "已从备份还原（保留 .bak）"
+            } else {
+                "已从备份还原（移除 .bak）"
+            }
+            .into(),
+        ),
+        Err(e) => Outcome::Failed(format!("还原失败：{e}")),
     }
 }
 

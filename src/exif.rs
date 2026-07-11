@@ -712,7 +712,8 @@ fn restore_times(path: &Path, times: Option<(filetime::FileTime, filetime::FileT
     }
 }
 
-fn backup_path(path: &Path) -> PathBuf {
+/// 某文件对应的 .bak 备份路径（`<文件名>.bak`）。
+pub fn backup_path(path: &Path) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(".bak");
     path.with_file_name(name)

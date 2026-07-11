@@ -41,6 +41,8 @@ pub enum Command {
     Xmp(XmpArgs),
     /// 读写旧版 IPTC-IIM 元数据（APP13/8BIM，仅 JPEG）
     Iptc(IptcArgs),
+    /// 从 .bak 备份还原文件（撤销之前的修改）
+    Restore(RestoreArgs),
 }
 
 /// 选择要处理的文件（所有子命令共用）。
@@ -435,4 +437,28 @@ pub struct IptcArgs {
     /// 清除整个 IPTC 块
     #[arg(long)]
     pub clear: bool,
+}
+
+// ---------------------------- restore ---------------------------
+
+#[derive(Args, Debug)]
+pub struct RestoreArgs {
+    #[command(flatten)]
+    pub target: TargetArgs,
+
+    /// 还原后保留 .bak 备份（默认还原后移除备份）
+    #[arg(long)]
+    pub keep_backup: bool,
+
+    /// 仅预览将要还原的文件，不实际操作
+    #[arg(short = 'n', long)]
+    pub dry_run: bool,
+
+    /// 跳过确认提示
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+
+    /// 详细输出
+    #[arg(short, long)]
+    pub verbose: bool,
 }
