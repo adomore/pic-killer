@@ -131,6 +131,7 @@ pic-killer time .\photos --from-name
 
 其它选项：
 - `--tags <列表>` 写入哪些时间字段：`original,digitized,modify`（默认全部）
+- `--tz <偏移>` 一并写入时区偏移标签（OffsetTime*），如 `--tz +08:00`
 - `--also-file-time` 同时把文件系统修改时间设为该拍摄时间
 
 ## `show` · 查看元数据
@@ -159,8 +160,9 @@ pic-killer set .\photo.jpg --description "海边日落" --user-comment "备注"
 # 方向（无损旋转标记）：normal / cw90 / ccw90 / 180 / mirror-h / mirror-v 或 1-8
 pic-killer set .\photo.jpg --orientation cw90
 
-# 通用设置任意字符串标签（可重复）
+# 通用设置任意字符串或数值标签（可重复）
 pic-killer set .\photo.jpg --set-string "OwnerName=Zhang" --set-string "Software=PicKiller"
+pic-killer set .\photo.jpg --set-string "iso=100" --set-string "fnumber=2.8" --set-string "exposuretime=1/200"
 
 # 删除指定标签（可重复）
 pic-killer set .\photo.jpg --remove artist --remove copyright
@@ -348,6 +350,7 @@ photo2.jpg,copyright,© 2024
 
 支持的字段（EXIF）：`datetimeoriginal`/`createdate`/`modifydate`/`alldates`、
 `artist` `copyright` `description` `software` `make` `model` `lensmodel` `owner` 等字符串标签、
+数值/有理数标签 `iso` `fnumber` `exposuretime`(可写 `1/200`) `focallength` `exposurecompensation` 等、
 `orientation`、`usercomment`、`gps`（值 `纬度,经度[,海拔]`）、`gps.clear`。
 
 ## `report` · 元数据统计

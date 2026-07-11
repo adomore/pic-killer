@@ -16,7 +16,7 @@ use little_exif::exif_tag_format::ExifTagFormat;
 use little_exif::filetype::get_file_type;
 use little_exif::ifd::ExifTagGroup;
 use little_exif::metadata::Metadata;
-use little_exif::rational::uR64;
+use little_exif::rational::{iR64, uR64};
 
 use crate::timeop::format_exif;
 
@@ -139,6 +139,20 @@ pub fn apply_datetime(metadata: &mut Metadata, target: NaiveDateTime, sel: TagSe
     }
 }
 
+/// 写入时区偏移标签（如 `+08:00`），与所选时间字段一一对应。
+pub fn apply_offset_time(metadata: &mut Metadata, offset: &str, sel: TagSelection) {
+    let v = offset.to_string();
+    if sel.original {
+        metadata.set_tag(ExifTag::OffsetTimeOriginal(v.clone()));
+    }
+    if sel.digitized {
+        metadata.set_tag(ExifTag::OffsetTimeDigitized(v.clone()));
+    }
+    if sel.modify {
+        metadata.set_tag(ExifTag::OffsetTime(v));
+    }
+}
+
 /// 读出当前拍摄时间字符串，依次尝试 DateTimeOriginal → CreateDate → ModifyDate。
 pub fn read_capture_time(metadata: &Metadata) -> Option<String> {
     let probes = [
@@ -175,6 +189,83 @@ pub fn string_tag(name: &str, value: String) -> Option<ExifTag> {
         "imageid" | "imageuniqueid" => ExifTag::ImageUniqueID(value),
         _ => return None,
     })
+}
+
+/// 常见数值 / 有理数 EXIF 标签：名称 + 字符串值 → `ExifTag`。
+/// 值支持整数、小数，有理数还支持 `分子/分母`（如快门 `1/200`）。返回 None 表示不是已知数值标签。
+pub fn numeric_tag(name: &str, value: &str) -> Option<Result<ExifTag>> {
+    let tag = match canonical(name).as_str() {
+        "iso" | "isospeed" | "isospeedratings" => int16u(value).map(|v| ExifTag::ISO(vec![v])),
+        "fnumber" | "aperture" => rational_u(value).map(|r| ExifTag::FNumber(vec![r])),
+        "exposuretime" | "shutter" | "shutterspeed" => {
+            rational_u(value).map(|r| ExifTag::ExposureTime(vec![r]))
+        }
+        "focallength" => rational_u(value).map(|r| ExifTag::FocalLength(vec![r])),
+        "focallengthin35mmformat" | "focallength35" => {
+            int16u(value).map(|v| ExifTag::FocalLengthIn35mmFormat(vec![v]))
+        }
+        "exposurecompensation" | "exposurecomp" | "ev" => {
+            rational_s(value).map(|r| ExifTag::ExposureCompensation(vec![r]))
+        }
+        "meteringmode" => int16u(value).map(|v| ExifTag::MeteringMode(vec![v])),
+        "whitebalance" => int16u(value).map(|v| ExifTag::WhiteBalance(vec![v])),
+        "flash" => int16u(value).map(|v| ExifTag::Flash(vec![v])),
+        "exposureprogram" => int16u(value).map(|v| ExifTag::ExposureProgram(vec![v])),
+        "colorspace" => int16u(value).map(|v| ExifTag::ColorSpace(vec![v])),
+        "contrast" => int16u(value).map(|v| ExifTag::Contrast(vec![v])),
+        "saturation" => int16u(value).map(|v| ExifTag::Saturation(vec![v])),
+        "sharpness" => int16u(value).map(|v| ExifTag::Sharpness(vec![v])),
+        _ => return None,
+    };
+    Some(tag)
+}
+
+fn int16u(s: &str) -> Result<u16> {
+    s.trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("需要 0-65535 的整数：`{s}`"))
+}
+
+fn rational_u(s: &str) -> Result<uR64> {
+    let s = s.trim();
+    if let Some((n, d)) = s.split_once('/') {
+        let nom = n
+            .trim()
+            .parse()
+            .map_err(|_| anyhow::anyhow!("分子无效：`{n}`"))?;
+        let den = d
+            .trim()
+            .parse()
+            .map_err(|_| anyhow::anyhow!("分母无效：`{d}`"))?;
+        Ok(uR64 {
+            nominator: nom,
+            denominator: den,
+        })
+    } else {
+        let f: f64 = s.parse().map_err(|_| anyhow::anyhow!("需要数值：`{s}`"))?;
+        Ok(uR64::from(f))
+    }
+}
+
+fn rational_s(s: &str) -> Result<iR64> {
+    let s = s.trim();
+    if let Some((n, d)) = s.split_once('/') {
+        let nom = n
+            .trim()
+            .parse()
+            .map_err(|_| anyhow::anyhow!("分子无效：`{n}`"))?;
+        let den = d
+            .trim()
+            .parse()
+            .map_err(|_| anyhow::anyhow!("分母无效：`{d}`"))?;
+        Ok(iR64 {
+            nominator: nom,
+            denominator: den,
+        })
+    } else {
+        let f: f64 = s.parse().map_err(|_| anyhow::anyhow!("需要数值：`{s}`"))?;
+        Ok(iR64::from(f))
+    }
 }
 
 /// 名称 → 一个“空壳” `ExifTag`，仅用于按 hex+group 删除标签。

@@ -146,6 +146,10 @@ pub struct TimeArgs {
     /// 同时把文件系统修改时间也设为该拍摄时间
     #[arg(long)]
     pub also_file_time: bool,
+
+    /// 一并写入时区偏移标签（OffsetTime*），如 +08:00
+    #[arg(long, value_name = "偏移", allow_hyphen_values = true)]
+    pub tz: Option<String>,
 }
 
 // ----------------------------- show -----------------------------

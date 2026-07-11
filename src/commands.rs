@@ -237,6 +237,14 @@ pub fn time(args: TimeArgs) -> Result<usize> {
     println!("  操作：{}", describe_time_mode(&mode));
     println!("  字段：{}", describe_tags(sel));
     println!("  文件：{} 个", files.len());
+    // 规范化时区偏移（如 +8 → +08:00）
+    let tz = match &args.tz {
+        Some(s) => Some(parse_tz(s)?.to_string()),
+        None => None,
+    };
+    if let Some(tz) = &tz {
+        println!("  时区：写入 OffsetTime {tz}");
+    }
     if args.also_file_time {
         println!("  附加：同步设置文件系统修改时间");
     }
@@ -251,11 +259,20 @@ pub fn time(args: TimeArgs) -> Result<usize> {
 
     let opts = write_opts(&args.write, !args.also_file_time);
     let stats = run_batch(&files, &args.write, |i, path| {
-        process_time(path, i, &mode, sel, &opts, args.also_file_time)
+        process_time(
+            path,
+            i,
+            &mode,
+            sel,
+            &opts,
+            args.also_file_time,
+            tz.as_deref(),
+        )
     });
     Ok(stats.failed)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_time(
     path: &Path,
     index: usize,
@@ -263,6 +280,7 @@ fn process_time(
     sel: TagSelection,
     opts: &WriteOpts,
     also_file_time: bool,
+    tz: Option<&str>,
 ) -> Outcome {
     if let Some(hint) = exif::unsupported_hint(path) {
         return Outcome::Skipped(hint);
@@ -298,6 +316,9 @@ fn process_time(
     };
 
     exif::apply_datetime(&mut metadata, target, sel);
+    if let Some(tz) = tz {
+        exif::apply_offset_time(&mut metadata, tz, sel);
+    }
     if let Err(e) = exif::commit_metadata(path, &metadata, opts) {
         return Outcome::Failed(format!("{e:#}"));
     }
@@ -1620,6 +1641,8 @@ fn apply_field(
         _ => {
             if let Some(tag) = exif::string_tag(&f, value.to_string()) {
                 metadata.set_tag(tag);
+            } else if let Some(r) = exif::numeric_tag(&f, value) {
+                metadata.set_tag(r?);
             } else {
                 bail!("未知或暂不支持的字段 `{field}`（apply 目前支持 EXIF 字段）");
             }
@@ -1781,8 +1804,14 @@ fn build_set_tags(a: &SetArgs) -> Result<Vec<ExifTag>> {
         let (name, val) = kv
             .split_once('=')
             .with_context(|| format!("--set-string 格式应为 名称=值，收到 `{kv}`"))?;
-        let tag = exif::string_tag(name, val.to_string())
-            .with_context(|| format!("`{name}` 不是受支持的字符串标签"))?;
+        let name = name.trim();
+        let tag = if let Some(t) = exif::string_tag(name, val.to_string()) {
+            t
+        } else if let Some(r) = exif::numeric_tag(name, val) {
+            r.with_context(|| format!("字段 `{name}` 的值 `{val}` 解析失败"))?
+        } else {
+            bail!("`{name}` 不是受支持的可写标签（字符串或数值）");
+        };
         tags.push(tag);
     }
     Ok(tags)
