@@ -42,16 +42,39 @@ fn collect(target: &TargetArgs) -> Vec<std::path::PathBuf> {
 }
 
 /// 按 `--where` 条件筛选文件。筛选说明写到 stderr，避免污染 show 的 JSON/CSV 输出。
+///
+/// 并行求值：筛选发生在 `run_batch` 之前，串行执行会给每个并行写入命令都串上一段单线程前戏。
 fn apply_where(
     files: Vec<std::path::PathBuf>,
     expr: &Option<String>,
 ) -> Result<Vec<std::path::PathBuf>> {
+    use rayon::prelude::*;
+
     let Some(expr) = expr else {
         return Ok(files);
     };
     let cond = crate::whereexpr::parse_expr(expr)?;
+
+    // 护栏：取反类条件（!= / !~ / no:）里的标签名，如果在所有候选文件里一个都没出现，
+    // 几乎必然是笔误。而这种条件遇到不存在的标签名会匹配「全部」文件——配上 strip
+    // 或 --clear，一个拼写错误就从「一部分照片」变成「全部照片」。这里直接中止。
+    for name in cond.negative_tag_names() {
+        let found = files
+            .par_iter()
+            .any(|p| crate::whereexpr::tag_name_exists(p, &name));
+        if !found {
+            bail!(
+                "--where 里的标签名 `{name}` 在所选 {} 个文件中一个都没匹配到。\n\
+                 取反条件（!= / !~ / no:）碰上不存在的标签名会匹配全部文件，已中止以免误伤。\n\
+                 请检查拼写（例如相机厂商的标签名是 make 而不是 camera），\
+                 或先用 `show --where` 确认选中的文件数量符合预期。",
+                files.len()
+            );
+        }
+    }
+
     let total = files.len();
-    let kept: Vec<_> = files.into_iter().filter(|p| cond.matches(p)).collect();
+    let kept: Vec<_> = files.into_par_iter().filter(|p| cond.matches(p)).collect();
     eprintln!("筛选 --where {expr}：{}/{total} 个文件符合条件", kept.len());
     Ok(kept)
 }
@@ -423,7 +446,17 @@ pub fn show(args: ShowArgs) -> Result<usize> {
     let files = collect(&args.target);
     let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
-        println!("未找到符合条件的图片文件。");
+        // 机器可读模式下 stdout 必须仍是合法文档：空数组 / 只有表头。
+        // 把中文提示挪到 stderr，否则 jq 与 Import-Csv 会直接解析失败。
+        if args.json {
+            eprintln!("未找到符合条件的图片文件。");
+            println!("[]");
+        } else if args.csv {
+            eprintln!("未找到符合条件的图片文件。");
+            println!("{}", csv_header(args.for_apply));
+        } else {
+            println!("未找到符合条件的图片文件。");
+        }
         return Ok(0);
     }
     let filter = args.filter.as_deref().map(|s| s.to_ascii_lowercase());
@@ -432,7 +465,11 @@ pub fn show(args: ShowArgs) -> Result<usize> {
         return show_json(&files, filter.as_deref());
     }
     if args.csv {
-        return show_csv(&files, filter.as_deref());
+        return if args.for_apply {
+            show_csv_for_apply(&files, filter.as_deref())
+        } else {
+            show_csv(&files, filter.as_deref())
+        };
     }
 
     let mut failed = 0;
@@ -630,9 +667,97 @@ fn json_escape(s: &str) -> String {
     out
 }
 
+/// CSV 表头。两种布局：完整转储（5 列）与 apply 可写回（3 列）。
+fn csv_header(for_apply: bool) -> &'static str {
+    if for_apply {
+        "file,field,value"
+    } else {
+        "file,group,name,hex,value"
+    }
+}
+
+/// 三列导出：`file,field,value`，字段名与值都用 `apply` 认得的形式，
+/// 让「`show` 导出 → 表格里批量编辑 → `apply` 写回」这条闭环真正成立。
+///
+/// 默认的五列布局是**转储**格式（含 group 与 hex，且 GPS 被拆成分量标签），
+/// 直接喂给 `apply` 每一行都会失败。这里只导出 apply 写得回去的字段：
+/// 读不回去的（尺寸、缩略图偏移等）跳过，GPS 各分量合并成一行 `gps`。
+fn show_csv_for_apply(files: &[std::path::PathBuf], filter: Option<&str>) -> Result<usize> {
+    let mut failed = 0;
+    println!("{}", csv_header(true));
+    for path in files {
+        if exif::unsupported_hint(path).is_some() {
+            continue;
+        }
+        let metadata = match exif::load_metadata(path) {
+            Ok(m) => m,
+            Err(_) => {
+                failed += 1;
+                continue;
+            }
+        };
+        let file = csv_field(&path.display().to_string());
+        let row = |field: &str, value: &str| {
+            println!("{},{},{}", file, csv_field(field), csv_field(value));
+        };
+
+        for t in exif::list_tags(&metadata) {
+            if let Some(f) = filter
+                && !t.name.to_ascii_lowercase().contains(f)
+            {
+                continue;
+            }
+            if !applyable_exif_field(&t.name) {
+                continue;
+            }
+            row(&t.name.to_ascii_lowercase(), &t.value);
+        }
+        if let Some(fix) = exif::read_gps(&metadata)
+            && filter.is_none_or(|f| "gps".contains(f))
+        {
+            let v = match fix.alt {
+                Some(a) => format!("{:.6},{:.6},{:.2}", fix.lat, fix.lon, a),
+                None => format!("{:.6},{:.6}", fix.lat, fix.lon),
+            };
+            row("gps", &v);
+        }
+        for (k, v) in filter_props(read_xmp_props(path), filter) {
+            row(&format!("xmp:{k}"), &v);
+        }
+        for (k, v) in filter_props(read_iptc_props(path), filter) {
+            if let Some(alias) = iptc_apply_alias(&k) {
+                row(&format!("iptc:{alias}"), &v);
+            }
+        }
+    }
+    Ok(failed)
+}
+
+/// 该 EXIF 标签名能否被 `apply` 的字段解析接受（决定 --for-apply 是否导出这一行）。
+fn applyable_exif_field(name: &str) -> bool {
+    let f = normalize_field(name);
+    matches!(
+        f.as_str(),
+        "datetimeoriginal" | "createdate" | "modifydate" | "orientation" | "usercomment"
+    ) || exif::string_tag(&f, String::new()).is_some()
+        || exif::numeric_tag(&f, "0").is_some()
+}
+
+/// IPTC 显示名 → `apply` 认得的别名。少数显示名与别名不一致（如 `Province/State` → `state`）。
+fn iptc_apply_alias(display: &str) -> Option<String> {
+    if iptc::resolve_field(display).is_some() {
+        return Some(display.to_ascii_lowercase());
+    }
+    let head = display.split('/').next()?;
+    if iptc::resolve_field(head).is_some() {
+        return Some(head.to_ascii_lowercase());
+    }
+    None
+}
+
 fn show_csv(files: &[std::path::PathBuf], filter: Option<&str>) -> Result<usize> {
     let mut failed = 0;
-    println!("file,group,name,hex,value");
+    println!("{}", csv_header(false));
     for path in files {
         if exif::unsupported_hint(path).is_some() {
             continue;
@@ -876,6 +1001,7 @@ fn process_copy(
 // ============================ rename ============================
 
 pub fn rename(args: RenameArgs) -> Result<usize> {
+    validate_pattern(&args.pattern)?;
     let files = collect(&args.target);
     let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
@@ -965,6 +1091,23 @@ fn plan_rename(
     Outcome::Changed(format!("-> {new_name}"))
 }
 
+/// 校验 `--pattern`：非法的 strftime 说明符会让 chrono 在格式化时 panic，
+/// 路径分隔符则会让重命名试图写进不存在的子目录。两者都在开跑前拦下。
+fn validate_pattern(pattern: &str) -> Result<()> {
+    use chrono::format::{Item, StrftimeItems};
+
+    if pattern.is_empty() {
+        bail!("--pattern 不能为空");
+    }
+    if pattern.contains('/') || pattern.contains('\\') {
+        bail!("--pattern 不能包含路径分隔符：`{pattern}`（模板只决定文件名，不创建子目录）");
+    }
+    if StrftimeItems::new(pattern).any(|item| matches!(item, Item::Error)) {
+        bail!("--pattern 含无效的 strftime 说明符：`{pattern}`，可用的如 %Y %m %d %H %M %S");
+    }
+    Ok(())
+}
+
 fn build_target(dir: &Path, stem: &str, ext: &str, counter: Option<u32>) -> std::path::PathBuf {
     let name = match counter {
         Some(c) => {
@@ -1028,7 +1171,12 @@ pub fn xmp(args: XmpArgs) -> Result<usize> {
             println!("  删除：{}", edit.removes.join("、"));
         }
     }
-    println!("  文件：{} 个（仅处理 JPEG/PNG）", files.len());
+    if args.sidecar {
+        check_sidecar_collisions(&files)?;
+        println!("  文件：{} 个（sidecar 模式，不改动原图）", files.len());
+    } else {
+        println!("  文件：{} 个（仅处理 JPEG/PNG）", files.len());
+    }
     if args.write.dry_run {
         println!("  模式：预览（不写入）");
     }
@@ -1103,6 +1251,31 @@ fn process_xmp(
     ))
 }
 
+/// sidecar 路径按主干推导，因此同名不同扩展名的文件会指向同一个 `.xmp`。
+///
+/// `IMG_0001.CR2` 与 `IMG_0001.JPG`——每台 RAW+JPEG 双格式相机的标准产物——都解析成
+/// `IMG_0001.xmp`。并行处理下两个任务会同时写同一个路径，结果是一方覆盖另一方，
+/// 而两条都报成功。这里在派发前直接拦下。
+fn check_sidecar_collisions(files: &[std::path::PathBuf]) -> Result<()> {
+    use std::collections::HashMap;
+
+    let mut seen: HashMap<std::path::PathBuf, std::path::PathBuf> = HashMap::new();
+    for f in files {
+        let scar = xmp::sidecar_path(f);
+        if let Some(prev) = seen.insert(scar.clone(), f.clone()) {
+            bail!(
+                "sidecar 路径冲突：`{}` 与 `{}` 都会写入 `{}`。\n\
+                 二者只有扩展名不同（RAW+JPEG 同名对就是这种情况），并行写入会互相覆盖。\n\
+                 请分两次运行，各自用 --ext 限定一种扩展名。",
+                prev.display(),
+                f.display(),
+                scar.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// sidecar 模式：只读写 `<主干>.xmp`，完全不碰原图（因此支持 RAW 等任意文件）。
 fn process_xmp_sidecar(path: &Path, edit: &XmpEdit, clear: bool, opts: &WriteOpts) -> Outcome {
     let scar = xmp::sidecar_path(path);
@@ -1118,6 +1291,15 @@ fn process_xmp_sidecar(path: &Path, edit: &XmpEdit, clear: bool, opts: &WriteOpt
         if opts.dry_run {
             return Outcome::Changed(format!("将删除 {name}"));
         }
+        // 删除是不可逆的，--backup 在这里同样要生效，否则 restore 无从恢复。
+        if opts.backup {
+            let bak = exif::backup_path(&scar);
+            if !bak.exists()
+                && let Err(e) = std::fs::copy(&scar, &bak)
+            {
+                return Outcome::Failed(format!("备份 sidecar 失败：{e}"));
+            }
+        }
         return match std::fs::remove_file(&scar) {
             Ok(()) => Outcome::Changed(format!("已删除 sidecar {name}")),
             Err(e) => Outcome::Failed(format!("删除 sidecar 失败：{e}")),
@@ -1132,9 +1314,11 @@ fn process_xmp_sidecar(path: &Path, edit: &XmpEdit, clear: bool, opts: &WriteOpt
     if opts.dry_run {
         return Outcome::Changed(format!("将写入 sidecar {name}"));
     }
-    match std::fs::write(&scar, packet) {
+    // 和其它写入走同一条原子落盘路径：临时文件 + fsync + 原子改名，并支持 --backup。
+    // 之前这里是裸的 fs::write，既非原子也不备份。
+    match exif::commit_raw(&scar, packet.as_bytes(), opts) {
         Ok(()) => Outcome::Changed(format!("已写入 sidecar {name}")),
-        Err(e) => Outcome::Failed(format!("写入 sidecar 失败：{e}")),
+        Err(e) => Outcome::Failed(format!("写入 sidecar 失败：{e:#}")),
     }
 }
 
@@ -1576,7 +1760,9 @@ fn parse_tz(s: &str) -> Result<FixedOffset> {
     };
     let (h, m) = if let Some((h, m)) = rest.split_once(':') {
         (h.to_string(), m.to_string())
-    } else if rest.len() == 4 {
+    } else if rest.len() == 4 && rest.bytes().all(|b| b.is_ascii_digit()) {
+        // 必须先确认是 4 个 ASCII 数字：直接按字节切 `rest[..2]` 会在多字节
+        // 字符中间 panic（`--tz 😀` 恰好也是 4 字节）。
         (rest[..2].to_string(), rest[2..].to_string())
     } else {
         (rest.to_string(), "0".to_string())
@@ -1670,7 +1856,21 @@ fn process_apply(path: &Path, fields: &[(String, String)], opts: &WriteOpts) -> 
             xmp_edit.sets.push((qname, val));
         } else if let Some(name) = fl.strip_prefix("iptc:") {
             match iptc::resolve_field(name) {
-                Some((r, n)) => iptc_edit.sets.push((r, n, vec![value.clone()])),
+                Some((r, n)) => {
+                    // 2:25 Keywords 与 2:80 By-line 是可重复数据集，show 用 "a; b" 呈现；
+                    // 这里按同样的分隔符切回去，导出→写回才是自洽的。
+                    let values = if matches!((r, n), (2, 25) | (2, 80)) {
+                        let split = split_multi(value);
+                        if split.is_empty() {
+                            vec![value.clone()]
+                        } else {
+                            split
+                        }
+                    } else {
+                        vec![value.clone()]
+                    };
+                    iptc_edit.sets.push((r, n, values))
+                }
                 None => return Outcome::Failed(format!("未知 IPTC 字段 `{field}`")),
             }
         } else {
@@ -1778,10 +1978,7 @@ fn apply_field(
     field: &str,
     value: &str,
 ) -> Result<()> {
-    let f = field
-        .trim()
-        .to_ascii_lowercase()
-        .replace(['-', '_', ' '], "");
+    let f = normalize_field(field);
     match f.as_str() {
         "datetimeoriginal" | "date" | "original" => {
             metadata.set_tag(ExifTag::DateTimeOriginal(datetime_value(value)?));
@@ -1819,11 +2016,24 @@ fn apply_field(
             } else if let Some(r) = exif::numeric_tag(&f, value) {
                 metadata.set_tag(r?);
             } else {
-                bail!("未知或暂不支持的字段 `{field}`（apply 目前支持 EXIF 字段）");
+                bail!(
+                    "未知的 EXIF 字段 `{field}`。写 XMP 或 IPTC 请加前缀，\
+                     如 `xmp:title`、`iptc:city`；EXIF 可用字段见用户手册 §10"
+                );
             }
         }
     }
     Ok(())
+}
+
+/// 归一化 CSV / `--set-string` 里的字段名：忽略大小写、连字符、下划线、空格与点号。
+///
+/// 点号必须一并去掉，否则 README 文档里写的 `gps.clear` 落不到 `gpsclear` 分支上。
+fn normalize_field(field: &str) -> String {
+    field
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['-', '_', ' ', '.'], "")
 }
 
 fn datetime_value(value: &str) -> Result<String> {
@@ -2086,26 +2296,87 @@ pub fn strip(args: StripArgs) -> Result<usize> {
     Ok(stats.failed)
 }
 
+/// 清除元数据。三套体系（EXIF / XMP / IPTC）合并成**一次**原子写入。
+///
+/// 之前这里只调用 `exif::strip_all`，而后者只清 EXIF 段——于是「清除全部元数据（保护隐私）」
+/// 实际会把 XMP 包与 IPTC 块连同里面的姓名、城市、位置原样留在文件里，命令还报成功。
 fn process_strip(path: &Path, gps_only: bool, opts: &WriteOpts) -> Outcome {
     if let Some(hint) = exif::unsupported_hint(path) {
         return Outcome::Skipped(hint);
     }
+    let mut bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => return Outcome::Failed(format!("读取失败：{e}")),
+    };
+
+    let mut done: Vec<&str> = Vec::new();
+
     if gps_only {
-        let mut metadata = match exif::load_metadata(path) {
-            Ok(m) => m,
+        // 只清坐标。城市/国家这类文字地名不是坐标，由不带参数的 strip 负责。
+        match exif::load_metadata(path) {
+            Ok(mut metadata) => {
+                if exif::remove_gps(&mut metadata) > 0 {
+                    if let Err(e) = exif::apply_metadata_to_buffer(path, &metadata, &mut bytes) {
+                        return Outcome::Failed(format!("{e:#}"));
+                    }
+                    done.push("EXIF GPS");
+                }
+            }
             Err(e) => return Outcome::Failed(format!("{e:#}")),
-        };
-        let removed = exif::remove_gps(&mut metadata);
-        if removed == 0 {
+        }
+        match strip_xmp_gps(&mut bytes) {
+            Ok(true) => done.push("XMP GPS"),
+            Ok(false) => {}
+            Err(e) => return Outcome::Failed(format!("{e:#}")),
+        }
+        if done.is_empty() {
             return Outcome::Skipped("本就没有 GPS 信息".into());
         }
-        if let Err(e) = exif::commit_metadata(path, &metadata, opts) {
+    } else {
+        if let Err(e) = exif::clear_exif_in_buffer(path, &mut bytes) {
             return Outcome::Failed(format!("{e:#}"));
         }
-    } else if let Err(e) = exif::strip_all(path, opts) {
+        done.push("EXIF");
+        if xmp::remove_packet(&mut bytes) {
+            done.push("XMP");
+        }
+        if iptc::remove_jpeg_iptc(&mut bytes) {
+            done.push("IPTC");
+        }
+    }
+
+    if let Err(e) = exif::commit_raw(path, &bytes, opts) {
         return Outcome::Failed(format!("{e:#}"));
     }
-    Outcome::Changed(String::new())
+    Outcome::Changed(format!("已清除 {}", done.join(" + ")))
+}
+
+/// 从缓冲区的 XMP 包里删除坐标类属性（`exif:GPS*`）。返回是否真的改动了。
+fn strip_xmp_gps(bytes: &mut Vec<u8>) -> Result<bool> {
+    if !xmp::supports_xmp(bytes) {
+        return Ok(false);
+    }
+    let Some(raw) = xmp::extract_packet_bytes(bytes) else {
+        return Ok(false);
+    };
+    let Ok(packet) = std::str::from_utf8(&raw) else {
+        return Ok(false);
+    };
+    let removes: Vec<String> = xmp::read_properties(packet)
+        .into_iter()
+        .map(|(q, _)| q)
+        .filter(|q| q.to_ascii_lowercase().starts_with("exif:gps"))
+        .collect();
+    if removes.is_empty() {
+        return Ok(false);
+    }
+    let edit = XmpEdit {
+        removes,
+        ..Default::default()
+    };
+    let updated = xmp::apply(Some(packet), &edit)?;
+    xmp::write_packet(bytes, &updated)?;
+    Ok(true)
 }
 
 // ============================ report ============================
@@ -2272,10 +2543,13 @@ fn check_file(path: &Path) -> Vec<(Severity, String)> {
     if exif::unsupported_hint(path).is_some() {
         return issues; // BMP/GIF 非损坏，不算问题
     }
-    let meta = match exif::load_metadata(path) {
+    // 严格加载：宽容版的 load_metadata 会把解析失败降级成「空元数据」，
+    // 于是一张 EXIF 段损坏的照片在 verify 眼里就是「没有元数据」，被算成正常——
+    // 而「损坏」恰恰是 verify 声称要检出的核心问题。
+    let meta = match exif::try_load_metadata(path) {
         Ok(m) => m,
-        Err(_) => {
-            issues.push((Severity::Error, "无法读取元数据（可能损坏或不支持）".into()));
+        Err(e) => {
+            issues.push((Severity::Error, format!("无法读取元数据：{e:#}")));
             return issues;
         }
     };

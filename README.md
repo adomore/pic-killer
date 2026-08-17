@@ -36,6 +36,17 @@
 | [`verify`](#verify--元数据体检) | 体检：查元数据问题（损坏/坐标越界/时间异常/字段不一致） |
 | `completions` | 生成 shell 补全脚本（bash/zsh/fish/powershell）或 man 手册页 |
 
+## 文档
+
+完整文档在 [`docs/`](docs/)，每份均有中英双语对照版本：
+
+| 文档 | 说明 |
+|------|------|
+| [新手入门手册](docs/GETTING-STARTED.zh.md) | 20 分钟入门：安装、安全网、五个真实任务 |
+| [用户手册](docs/USER-MANUAL.zh.md) | 完整参考：16 个命令、每个选项、字段表、格式支持 |
+| [审计报告](docs/AUDIT.zh.md) | 工程审计：架构、发现、安全性、测试覆盖 |
+| [功能预研](docs/FEATURE-RESEARCH.zh.md) | 竞品定位、能力差距、候选功能 |
+
 ## 下载安装
 
 ### 预编译二进制（推荐）
@@ -58,7 +69,7 @@ sha256sum -c SHA256SUMS.txt
 
 ### 从源码构建
 
-需要 Rust 1.88+（edition 2024）：
+需要 Rust 1.85+（edition 2024）：
 
 ```bash
 git clone https://github.com/adomore/pic-killer.git
@@ -99,6 +110,9 @@ pic-killer set  .\photos -r --where make=Canon --artist 张三   # 只改 Canon 
 
 多个条件可用 `&&`（都满足）或 `||`（任一满足）组合，例如
 `--where "no-gps && make=Canon"`、`--where "make=Canon || make=Nikon"`。
+两者不能混用，混用会直接报错。另外 `!=` / `!~` / `no:` 是取反语义，写了个不存在的标签名
+（如 `camera!=Canon`）本会匹配全部文件，这种情况也会被拒绝——详见
+[用户手册 §6](docs/USER-MANUAL.zh.md)。
 
 会写入的子命令（`time`/`set`/`gps`/`strip`/`rotate`/`copy`/`xmp`/`iptc`/`geotag`）还支持：
 
@@ -343,12 +357,16 @@ pic-killer geotag .\photos --gpx .\track.gpx --offset +30s
 
 ## `apply` · 从 CSV 导入
 
-用一份 `file,field,value` 三列 CSV 批量写回元数据——配合 `show --csv/--json` 导出，就能
+用一份 `file,field,value` 三列 CSV 批量写回元数据——配合 `show --csv --for-apply` 导出，就能
 「导出 → 表格里批量编辑 → 写回」。同一文件的多个字段会合并成一次写入（并行、原子）。
 
 ```powershell
+pic-killer show .\photos -r --csv --for-apply > meta.csv
 pic-killer apply --from meta.csv
 ```
+
+> 注意要加 `--for-apply`。不带它的 `show --csv` 是**转储**格式（五列，含分组与十六进制码，
+> GPS 还被拆成了分量标签），喂不回 `apply`。
 
 CSV 示例（含逗号的值用引号包裹；可带表头，自动跳过；容忍 Excel 的 UTF-8 BOM）：
 

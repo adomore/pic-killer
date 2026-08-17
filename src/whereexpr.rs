@@ -102,18 +102,27 @@ pub struct WhereExpr {
 }
 
 /// 解析组合条件表达式。含 `||` 视为 OR，否则按 `&&` 拆成 AND（单条件也走这里）。
+///
+/// 不支持 `&&` 与 `||` 混用。混用会被明确拒绝，而不是按其中一种切分后静默误解析——
+/// 后者会让 `a && b || c` 变成对一个名叫 `a && b` 的标签做比较，返回错误的文件集合。
 pub fn parse_expr(expr: &str) -> Result<WhereExpr> {
-    let (sep, any) = if expr.contains("||") {
-        ("||", true)
+    let (sep, other, any) = if expr.contains("||") {
+        ("||", "&&", true)
     } else {
-        ("&&", false)
+        ("&&", "||", false)
     };
-    let conditions = expr
+    let parts: Vec<&str> = expr
         .split(sep)
         .map(str::trim)
         .filter(|t| !t.is_empty())
-        .map(parse)
-        .collect::<Result<Vec<_>>>()?;
+        .collect();
+    if let Some(bad) = parts.iter().find(|p| p.contains(other)) {
+        bail!(
+            "--where 不支持 `&&` 与 `||` 混用（在 `{bad}` 处）。请拆成两条命令，\
+             或先用 `show` 分别确认两组条件各自选中了哪些文件"
+        );
+    }
+    let conditions = parts.into_iter().map(parse).collect::<Result<Vec<_>>>()?;
     if conditions.is_empty() {
         bail!("--where 条件为空");
     }
@@ -128,10 +137,48 @@ impl WhereExpr {
             self.conditions.iter().all(|c| c.matches(path))
         }
     }
+
+    /// 那些「标签名压根不存在时会匹配所有文件」的条件里用到的标签名。
+    ///
+    /// `!=`、`!~` 与 `no:名称` 都是取反语义：匹配不到任何标签就没有值可比，
+    /// 取反后对每个文件都为真。于是 `camera!=Canon`（根本没有 camera 这个标签）
+    /// 会选中全部文件——配上 `strip` 就是一个笔误把「一部分」变成「全部」。
+    /// 调用方应当拿这些名字去确认它们至少在某个文件里存在，见 [`tag_name_exists`]。
+    pub fn negative_tag_names(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for c in &self.conditions {
+            let name = match c {
+                Condition::Tag {
+                    name,
+                    op: Op::Ne | Op::NotContains,
+                    ..
+                } => name,
+                Condition::TagPresence {
+                    name,
+                    present: false,
+                } => name,
+                _ => continue,
+            };
+            if !out.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+                out.push(name.clone());
+            }
+        }
+        out
+    }
+}
+
+/// 该文件里是否存在名称包含 `name` 的标签（跨 EXIF / XMP / IPTC）。
+pub fn tag_name_exists(path: &Path, name: &str) -> bool {
+    let name_l = name.to_ascii_lowercase();
+    all_props(path)
+        .iter()
+        .any(|(n, _)| n.to_ascii_lowercase().contains(&name_l))
 }
 
 fn strip_prefix_ci(s: &str, prefix: &str) -> Option<String> {
-    if s.len() >= prefix.len() && s[..prefix.len()].eq_ignore_ascii_case(prefix) {
+    // `get` 而不是索引切片：直接切会在多字节字符中间 panic（如 `--where 😀`）。
+    let head = s.get(..prefix.len())?;
+    if head.eq_ignore_ascii_case(prefix) {
         Some(s[prefix.len()..].trim().to_string())
     } else {
         None

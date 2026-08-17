@@ -171,6 +171,10 @@ pub struct ShowArgs {
     #[arg(long)]
     pub csv: bool,
 
+    /// 配合 --csv：改为输出 apply 可直接写回的三列 file,field,value
+    #[arg(long = "for-apply", requires = "csv")]
+    pub for_apply: bool,
+
     /// 只显示名称含该关键字的标签（大小写不敏感）
     #[arg(long, value_name = "关键字")]
     pub filter: Option<String>,

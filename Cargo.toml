@@ -2,6 +2,8 @@
 name = "pic-killer"
 version = "1.0.0"
 edition = "2024"
+# edition 2024 需要 1.85+。写明后 cargo 会强制检查，README 的说法也就有了约束。
+rust-version = "1.85"
 
 [dependencies]
 anyhow = "1.0.103"

@@ -5,8 +5,11 @@ CI 跑单元测试；这里跑**端到端功能覆盖**和**性能覆盖**，全
 
 | 脚本 | 覆盖 |
 |------|------|
-| `functest.ps1` | 全部子命令的端到端断言：无损（像素 SHA256）、EXIF/XMP/IPTC 并存、sidecar（含 RAW）、`--where` 单条件与 `&&`/`||`、通配符、BMP 友好跳过、completions、verify 等 |
+| `functest.ps1` | 全部 16 个子命令的端到端断言：无损（像素 SHA256）、EXIF/XMP/IPTC 并存、sidecar（含 RAW）、`--where` 单条件与 `&&`/`||`、通配符、BMP 友好跳过、completions、verify，以及 `F-01`…`F-09` 一组针对审计发现的回归断言 |
 | `perftest.ps1` | 500 张批量：顺序 vs 并行吞吐与加速比、高负载下的正确性、无残留临时文件 |
+
+`functest.ps1` 已接入 CI（`.github/workflows/ci.yml` 的 `e2e` job，`windows-latest`），
+是 `commands.rs` 编排层唯一的自动化回归保护。`perftest.ps1` 因为对机器负载敏感，仍然只在本地手动跑。
 
 ## 运行
 

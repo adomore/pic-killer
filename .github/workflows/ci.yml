@@ -39,3 +39,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: 运行测试
         run: cargo test --all-features --locked
+
+  # 端到端门禁。cargo test 只跑得到纯逻辑模块，占生产代码 41% 的 commands.rs
+  # 编排层全靠这一套断言兜底；不进 CI 就等于没有回归保护。
+  # 脚本依赖 PowerShell + System.Drawing，因此只能在 Windows 上跑。
+  e2e:
+    name: 端到端（functest.ps1）
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 构建 release 二进制
+        run: cargo build --release --locked
+      - name: 运行端到端断言
+        shell: powershell
+        run: .\tests\functest.ps1

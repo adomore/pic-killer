@@ -1,4 +1,4 @@
-﻿# PIC-Killer 功能测试覆盖 —— 断言式，覆盖 14 个命令与横切能力
+﻿# PIC-Killer 功能测试覆盖 —— 断言式，覆盖全部 16 个命令、横切能力与审计发现的回归
 $ErrorActionPreference = "Continue"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Drawing
@@ -115,7 +115,7 @@ Assert ($o -match "Title\s+开幕") "iptc title"
 Assert ($o -match "City\s+北京") "iptc city"
 Assert ($o -match "Keywords\s+体育; 开幕") "iptc keywords"
 Run @("iptc",(P "i1.jpg"),"--clear","-y") | Out-Null
-Assert (-not ((Sh (P "i1.jpg")) -match "^\s+Title\s+开幕")) "iptc --clear"
+Assert (-not ((Sh (P "i1.jpg")) -match "(?m)^\s+Title\s+开幕")) "iptc --clear"
 
 # ---------- 三套并存 ----------
 MkJpg "co.jpg"
@@ -219,6 +219,98 @@ Run @("gps",(P "vbad.jpg"),"--lat","200","--lon","300","-y") | Out-Null
 $vout = Run @("verify",(P "vok.jpg"),(P "vbad.jpg"))
 Assert ($vout -match "GPS 坐标越界") "verify 检出 GPS 越界"
 Assert ($vout -match "正常 1") "verify 正常计数"
+# ---------- 回归：审计发现的缺陷（每条对应 docs/AUDIT.zh.md 的一个编号）----------
+
+# F-01 strip 必须连 XMP 与 IPTC 一起清除，否则「保护隐私」是假的。
+# 旧测试只写 EXIF 就去 strip，所以这个缺陷能在全绿套件下存活。
+MkJpg "f01.jpg"
+Run @("set",(P "f01.jpg"),"--artist","张三","-y") | Out-Null
+Run @("gps",(P "f01.jpg"),"--lat","30.2741","--lon","120.1551","-y") | Out-Null
+Run @("xmp",(P "f01.jpg"),"--title","家","--creator","张三","--city","杭州","-y") | Out-Null
+Run @("iptc",(P "f01.jpg"),"--city","杭州","--creator","张三","-y") | Out-Null
+$o = Sh (P "f01.jpg")
+Assert (($o -match "dc:creator") -and ($o -match "(?m)^\s+City\s+杭州")) "F-01 前置：三套元数据都已写入"
+Run @("strip",(P "f01.jpg"),"-y") | Out-Null
+$o = Sh (P "f01.jpg")
+Assert (-not ($o -match "dc:creator")) "F-01 strip 清除 XMP"
+Assert (-not ($o -match "(?m)^\s+City\s+杭州")) "F-01 strip 清除 IPTC"
+$raw01 = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes((P "f01.jpg")))
+Assert (-not $raw01.Contains("张三")) "F-01 strip 后文件里搜不到姓名"
+Assert (-not $raw01.Contains("杭州")) "F-01 strip 后文件里搜不到城市"
+
+# F-02 取反条件遇到不存在的标签名会匹配全部文件；必须报错而不是静默放行。
+MkJpg "f02a.jpg"; MkJpg "f02b.jpg"
+Run @("set",(P "f02a.jpg"),"--make","Canon","-y") | Out-Null
+$r = Run @("show",$work,"--where","camera!=Canon","--ext","jpg")
+Assert ($r -match "一个都没匹配到") "F-02 未知标签名的 != 被拒绝"
+$r = Run @("show",$work,"--where","make!=Canon","--ext","jpg")
+Assert (($r -match "筛选 --where") -and (-not ($r -match "一个都没匹配到"))) "F-02 正常的 != 仍然可用"
+
+# F-03 && 与 || 混用必须报错，而不是按其中一种切分后静默误解析。
+$r = Run @("show",$work,"--where","has-gps && make!=Canon || make=Nikon","--ext","jpg")
+Assert ($r -match "不支持.{0,20}混用") "F-03 混用运算符被拒绝"
+
+# F-04 show --csv --for-apply 的输出必须能被 apply 直接吃回去。
+MkJpg "f04src.jpg"; MkJpg "f04dst.jpg"
+Run @("set",(P "f04src.jpg"),"--artist","李四","--make","Canon","-y") | Out-Null
+Run @("time",(P "f04src.jpg"),"--set","2023-06-15 18:05:00","-y") | Out-Null
+Run @("gps",(P "f04src.jpg"),"--lat","30.2741","--lon","120.1551","-y") | Out-Null
+Run @("xmp",(P "f04src.jpg"),"--title","西湖","-y") | Out-Null
+Run @("iptc",(P "f04src.jpg"),"--city","杭州","-y") | Out-Null
+$rt = P "roundtrip.csv"
+& $exe show (P "f04src.jpg") --csv --for-apply | Set-Content -Path $rt -Encoding utf8
+Assert ((Get-Content $rt -First 1) -eq "file,field,value") "F-04 三列表头"
+(Get-Content $rt) -replace [regex]::Escape((P "f04src.jpg")), (P "f04dst.jpg") | Set-Content -Path $rt -Encoding utf8
+Run @("apply","--from",$rt,"-y") | Out-Null
+$o = Sh (P "f04dst.jpg")
+Assert ($o -match "Artist\s+李四") "F-04 闭环回写 EXIF"
+Assert ($o -match "位置：30\.274100") "F-04 闭环回写 GPS"
+Assert ($o -match "dc:title\s+西湖") "F-04 闭环回写 XMP"
+Assert ($o -match "(?m)^\s+City\s+杭州") "F-04 闭环回写 IPTC"
+
+# F-05 RAW+JPEG 同名对会解析到同一个 .xmp，必须在派发前拦下而不是互相覆盖。
+$pairDir = Join-Path $work "rawpair"
+[System.IO.Directory]::CreateDirectory($pairDir) | Out-Null
+$b=New-Object System.Drawing.Bitmap 16,16; $b.Save((Join-Path $pairDir "IMG_0001.JPG"),[System.Drawing.Imaging.ImageFormat]::Jpeg); $b.Dispose()
+[System.IO.File]::WriteAllBytes((Join-Path $pairDir "IMG_0001.CR2"), [byte[]](1..40))
+$r = Run @("xmp",$pairDir,"--ext","cr2,jpg","--sidecar","--title","X","-y")
+Assert ($r -match "sidecar 路径冲突") "F-05 sidecar 冲突被拦下"
+Assert (-not (Test-Path (Join-Path $pairDir "IMG_0001.xmp"))) "F-05 冲突时不产生 sidecar"
+
+# F-06 verify 要能区分「没有元数据」与「元数据损坏」。
+MkJpg "f06none.jpg"
+MkJpg "f06bad.jpg"; Run @("set",(P "f06bad.jpg"),"--make","Canon","-y") | Out-Null
+$bytes = [System.IO.File]::ReadAllBytes((P "f06bad.jpg"))
+$at = -1
+for ($i=0; $i -lt $bytes.Length-6; $i++) {
+  if ($bytes[$i] -eq 0x45 -and $bytes[$i+1] -eq 0x78 -and $bytes[$i+2] -eq 0x69 -and $bytes[$i+3] -eq 0x66 -and $bytes[$i+4] -eq 0 -and $bytes[$i+5] -eq 0) { $at = $i; break }
+}
+if ($at -ge 0) { for ($k=$at+6; $k -lt [Math]::Min($at+46,$bytes.Length); $k++) { $bytes[$k] = 0xAB } }
+[System.IO.File]::WriteAllBytes((P "f06bad.jpg"), $bytes)
+Assert ((Run @("verify",(P "f06none.jpg"))) -match "正常 1") "F-06 无元数据不算问题"
+Assert ((Run @("verify",(P "f06bad.jpg"))) -match "无法读取元数据") "F-06 检出损坏的元数据"
+
+# F-07 README 文档写的 gps.clear 必须真的能用。
+MkJpg "f07.jpg"; Run @("gps",(P "f07.jpg"),"--lat","1","--lon","2","-y") | Out-Null
+$c7 = P "f07.csv"
+Set-Content -Path $c7 -Encoding utf8 -Value @("file,field,value", ('"' + (P "f07.jpg") + '",gps.clear,1'))
+Run @("apply","--from",$c7,"-y") | Out-Null
+Assert (-not ((Sh (P "f07.jpg")) -match "GPSLatitude")) "F-07 gps.clear 可用"
+
+# F-08 用户输入不该让进程 panic。
+$gpx8 = P "f08.gpx"
+Set-Content -Path $gpx8 -Encoding utf8 -Value @('<?xml version="1.0"?>','<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>','<trkpt lat="30.0" lon="120.0"><time>2023-06-15T02:00:00Z</time></trkpt>','</trkseg></trk></gpx>')
+Assert (-not ((Run @("geotag",(P "f07.jpg"),"--gpx",$gpx8,"--tz","😀","-y")) -match "panicked")) "F-08 --tz 非 ASCII 不 panic"
+Assert (-not ((Run @("rename",(P "f07.jpg"),"--pattern","%Q","-y")) -match "panicked")) "F-08 --pattern 非法说明符不 panic"
+Assert (-not ((Run @("show",(P "f07.jpg"),"--where","😀=x")) -match "panicked")) "F-08 --where 非 ASCII 不 panic"
+Assert (-not ((Run @("show",(P "f07.jpg"),"--where","no:😀")) -match "panicked")) "F-08 --where no: 非 ASCII 不 panic"
+
+# F-09 零匹配时 stdout 仍须是合法的机器可读文档。
+$emptyJson = (& $exe show $work --ext "nosuchext" --json 2>$null | Out-String).Trim()
+Assert ($emptyJson -eq "[]") "F-09 空结果 --json 输出 []"
+$emptyCsv = (& $exe show $work --ext "nosuchext" --csv 2>$null | Out-String).Trim()
+Assert ($emptyCsv -eq "file,group,name,hex,value") "F-09 空结果 --csv 只输出表头"
+
 # ---------- 汇总 ----------
 $total = $script:pass + $script:fail
 Write-Host ""

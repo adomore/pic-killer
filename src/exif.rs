@@ -44,12 +44,77 @@ pub fn unsupported_hint(path: &Path) -> Option<String> {
 }
 
 /// 读取文件元数据；若文件不含可解析的 EXIF 则返回空元数据对象。
+///
+/// 这是写入类命令用的「宽容」版本：解析失败按「没有元数据」处理，从而不会
+/// 因为一段坏掉的 EXIF 就拒绝给文件写入新标签。要区分「没有」与「坏了」，
+/// 用 [`try_load_metadata`]。
 pub fn load_metadata(path: &Path) -> Result<Metadata> {
     if let Some(hint) = unsupported_hint(path) {
         bail!("{hint}");
     }
+    ensure_readable(path)?;
     get_file_type(path).with_context(|| format!("不支持的文件类型：{}", path.display()))?;
     Ok(Metadata::new_from_path(path).unwrap_or_else(|_| Metadata::new()))
+}
+
+/// 严格版读取：EXIF **损坏**时返回 Err；文件本来就没有 EXIF 则返回空元数据。
+///
+/// `verify` 用它来区分「这张照片没有元数据」与「这张照片的元数据坏了」——
+/// 后者正是 `verify` 声称要检出的问题，用 [`load_metadata`] 是永远看不见的。
+pub fn try_load_metadata(path: &Path) -> Result<Metadata> {
+    if let Some(hint) = unsupported_hint(path) {
+        bail!("{hint}");
+    }
+    ensure_readable(path)?;
+    get_file_type(path).with_context(|| format!("不支持的文件类型：{}", path.display()))?;
+    match Metadata::new_from_path(path) {
+        Ok(m) => Ok(m),
+        Err(e) if is_absent_not_corrupt(&e) => Ok(Metadata::new()),
+        Err(e) => bail!("元数据解析失败：{e}"),
+    }
+}
+
+/// 上游用同一个 `Err` 表达两件不同的事：「扫完整个文件也没有 EXIF 段」与「EXIF 段坏了」。
+/// 只有前者有稳定的消息文本，据此归一化成「没有元数据」，其余一律按损坏处理。
+///
+/// 这是在对上游的错误文本做匹配，属于脆弱耦合：若某天升级 little_exif 后
+/// `verify` 开始把大量无 EXIF 的正常照片报成问题，第一个该看的就是这里。
+fn is_absent_not_corrupt(err: &std::io::Error) -> bool {
+    err.to_string()
+        .to_ascii_lowercase()
+        .contains("no exif data")
+}
+
+/// 文件必须存在且可读，否则给出比「不支持的文件类型」更贴切的错误。
+fn ensure_readable(path: &Path) -> Result<()> {
+    if !path.exists() {
+        bail!("文件不存在：{}", path.display());
+    }
+    Ok(())
+}
+
+/// 在内存缓冲区里清除 EXIF 元数据段（不落盘），供需要一次写入完成多段清理的调用方组合使用。
+pub fn clear_exif_in_buffer(path: &Path, buffer: &mut Vec<u8>) -> Result<()> {
+    let file_type =
+        get_file_type(path).with_context(|| format!("不支持的文件类型：{}", path.display()))?;
+    Metadata::clear_metadata(buffer, file_type)
+        .map_err(|e| anyhow::anyhow!("清除元数据失败：{e}"))?;
+    Ok(())
+}
+
+/// 把（已修改的）元数据对象编码进内存缓冲区（不落盘）。与 [`clear_exif_in_buffer`] 配套，
+/// 让调用方能把 EXIF / XMP / IPTC 三段改动合并成一次原子写入。
+pub fn apply_metadata_to_buffer(
+    path: &Path,
+    metadata: &Metadata,
+    buffer: &mut Vec<u8>,
+) -> Result<()> {
+    let file_type =
+        get_file_type(path).with_context(|| format!("不支持的文件类型：{}", path.display()))?;
+    metadata
+        .write_to_vec(buffer, file_type)
+        .map_err(|e| anyhow::anyhow!("编码元数据失败：{e}"))?;
+    Ok(())
 }
 
 /// 把一段完整的文件字节原子写回（备份 + 保留时间戳）。所有写命令的公共落盘出口。
@@ -75,22 +140,6 @@ pub fn commit_metadata(path: &Path, metadata: &Metadata, opts: &WriteOpts) -> Re
     metadata
         .write_to_vec(&mut buffer, file_type)
         .map_err(|e| anyhow::anyhow!("编码元数据失败：{e}"))?;
-    commit_raw(path, &buffer, opts)
-}
-
-/// 清除文件的全部元数据（隐私清理）。
-pub fn strip_all(path: &Path, opts: &WriteOpts) -> Result<()> {
-    if let Some(hint) = unsupported_hint(path) {
-        bail!("{hint}");
-    }
-    let file_type =
-        get_file_type(path).with_context(|| format!("不支持的文件类型：{}", path.display()))?;
-    if opts.dry_run {
-        return Ok(());
-    }
-    let mut buffer = fs::read(path).with_context(|| format!("读取失败：{}", path.display()))?;
-    Metadata::clear_metadata(&mut buffer, file_type)
-        .map_err(|e| anyhow::anyhow!("清除元数据失败：{e}"))?;
     commit_raw(path, &buffer, opts)
 }
 
