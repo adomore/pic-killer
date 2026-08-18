@@ -90,12 +90,18 @@ broken while all six release gates passed. Everything below closes those finding
   range. **It does not make the project unaffected:** `little_exif` 0.6.23 pins
   `quick-xml ^0.37.5`, so a second copy stays in the tree, and it is reachable — that
   crate's own `src/xmp.rs` calls `attributes()` on the PNG EXIF-clearing path. Binary
-  size grows 35,840 bytes (+1.0%). The duplicate disappears once upstream moves.
+  size grows 35,840 bytes (+1.0%). The duplicate disappears once upstream moves —
+  filed as TechnikTobi/little_exif#104.
 - CI gained a `cargo audit` job. Both advisories were published 2026-06-29 and went
   unnoticed here for two months because nothing checked. The two known-unfixable ones are
   ignored by ID, so a *new* advisory still fails the build.
 - CI declares `permissions: contents: read`; the workflow previously inherited whatever
   the repository default granted.
+- The release workflow no longer grants `contents: write` to every job. All six build
+  jobs compile the entire dependency tree — every `build.rs` and proc macro in it — and
+  did so holding a repository-writable token. Write is now scoped to the single job that
+  creates the release. Downloading artifacts from the same run needs no extra permission,
+  and a pre-release run confirmed it end to end.
 
 ## [1.0.0] — 2026-07-11
 
