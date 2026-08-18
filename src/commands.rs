@@ -36,9 +36,27 @@ struct Stats {
     failed: usize,
 }
 
-fn collect(target: &TargetArgs) -> Vec<std::path::PathBuf> {
+fn collect(target: &TargetArgs) -> Result<Vec<std::path::PathBuf>> {
     let ext = scan::parse_ext_set(&target.ext);
-    scan::collect_files(&target.paths, &ext, target.recursive)
+    let found = scan::collect_files(&target.paths, &ext, target.recursive);
+    if !found.missing.is_empty() {
+        let list: Vec<String> = found
+            .missing
+            .iter()
+            .map(|p| format!("  {}", p.display()))
+            .collect();
+        bail!(
+            "以下路径不存在：
+{}
+
+批量操作前先确认路径拼写；             继续执行只会处理其余路径，让人误以为全部都处理过了。",
+            list.join(
+                "
+"
+            )
+        );
+    }
+    Ok(found.files)
 }
 
 /// 按 `--where` 条件筛选文件。筛选说明写到 stderr，避免污染 show 的 JSON/CSV 输出。
@@ -250,7 +268,7 @@ enum TimeMode {
 pub fn time(args: TimeArgs) -> Result<usize> {
     let mode = build_time_mode(&args)?;
     let sel = parse_time_tags(&args.tags)?;
-    let files = collect(&args.target);
+    let files = collect(&args.target)?;
     let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
@@ -443,7 +461,7 @@ fn describe_delta(d: &Delta) -> String {
 // ============================ show ============================
 
 pub fn show(args: ShowArgs) -> Result<usize> {
-    let files = collect(&args.target);
+    let files = collect(&args.target)?;
     let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         // 机器可读模式下 stdout 必须仍是合法文档：空数组 / 只有表头。
@@ -821,10 +839,15 @@ fn read_xmp_props(path: &Path) -> Vec<(String, String)> {
 
 fn filter_props(props: Vec<(String, String)>, filter: Option<&str>) -> Vec<(String, String)> {
     match filter {
-        Some(f) => props
-            .into_iter()
-            .filter(|(k, _)| k.to_ascii_lowercase().contains(f))
-            .collect(),
+        // 两边都归一化。只归一化键、指望调用方先把关键字转成小写，是个隐式约定：
+        // 现在的调用方都照做了，但下一个未必，而失效方式是「静默少显示几行」。
+        Some(f) => {
+            let needle = f.to_ascii_lowercase();
+            props
+                .into_iter()
+                .filter(|(k, _)| k.to_ascii_lowercase().contains(&needle))
+                .collect()
+        }
         None => props,
     }
 }
@@ -854,7 +877,7 @@ pub fn rotate(args: RotateArgs) -> Result<usize> {
         RotateOp::Reset
     };
 
-    let files = collect(&args.target);
+    let files = collect(&args.target)?;
     let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
@@ -933,7 +956,7 @@ pub fn copy(args: CopyArgs) -> Result<usize> {
     let source = exif::load_metadata(&args.from)
         .with_context(|| format!("读取参考照片失败：{}", args.from.display()))?;
 
-    let files = collect(&args.target);
+    let files = collect(&args.target)?;
     let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
@@ -1002,7 +1025,7 @@ fn process_copy(
 
 pub fn rename(args: RenameArgs) -> Result<usize> {
     validate_pattern(&args.pattern)?;
-    let files = collect(&args.target);
+    let files = collect(&args.target)?;
     let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
@@ -1152,7 +1175,7 @@ pub fn xmp(args: XmpArgs) -> Result<usize> {
         bail!("未指定任何 XMP 操作，用 `pic-killer xmp --help` 查看可用选项");
     }
 
-    let files = collect(&args.target);
+    let files = collect(&args.target)?;
     let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
@@ -1411,7 +1434,7 @@ pub fn iptc(args: IptcArgs) -> Result<usize> {
         bail!("未指定任何 IPTC 操作，用 `pic-killer iptc --help` 查看可用选项");
     }
 
-    let files = collect(&args.target);
+    let files = collect(&args.target)?;
     let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
@@ -1557,7 +1580,7 @@ fn read_sidecar_props(path: &Path) -> Vec<(String, String)> {
 // ============================ restore ============================
 
 pub fn restore(args: RestoreArgs) -> Result<usize> {
-    let files = collect(&args.target);
+    let files = collect(&args.target)?;
     let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
@@ -1659,7 +1682,7 @@ pub fn geotag(args: GeotagArgs) -> Result<usize> {
     let tz = args.tz.as_deref().map(parse_tz).transpose()?;
     let offset = args.offset.as_deref().map(parse_delta).transpose()?;
 
-    let files = collect(&args.target);
+    let files = collect(&args.target)?;
     let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
@@ -1758,6 +1781,14 @@ fn parse_tz(s: &str) -> Result<FixedOffset> {
     } else {
         (1, s.strip_prefix('+').unwrap_or(s))
     };
+    // 只允许数字与一个冒号。不校验的话 `++08` 会被接受——因为 Rust 的整数解析
+    // 认 `+08` 这种带正号的写法，于是垃圾输入被静默当成 +08:00。
+    if rest.is_empty()
+        || rest.matches(':').count() > 1
+        || !rest.chars().all(|c| c.is_ascii_digit() || c == ':')
+    {
+        bail!("无效时区 `{s}`，应形如 +08:00、-05:30、0800、+8 或 Z");
+    }
     let (h, m) = if let Some((h, m)) = rest.split_once(':') {
         (h.to_string(), m.to_string())
     } else if rest.len() == 4 && rest.bytes().all(|b| b.is_ascii_digit()) {
@@ -1852,8 +1883,10 @@ fn process_apply(path: &Path, fields: &[(String, String)], opts: &WriteOpts) -> 
     for (field, value) in fields {
         let fl = field.to_ascii_lowercase();
         if fl.starts_with("xmp:") {
-            let (qname, val) = resolve_xmp_field(&field[4..], value);
-            xmp_edit.sets.push((qname, val));
+            match resolve_xmp_field(&field[4..], value) {
+                Ok((qname, val)) => xmp_edit.sets.push((qname, val)),
+                Err(e) => return Outcome::Failed(format!("{e:#}")),
+            }
         } else if let Some(name) = fl.strip_prefix("iptc:") {
             match iptc::resolve_field(name) {
                 Some((r, n)) => {
@@ -1878,7 +1911,13 @@ fn process_apply(path: &Path, fields: &[(String, String)], opts: &WriteOpts) -> 
         }
     }
 
-    // 1) EXIF
+    // 三套体系合并成一次原子写入。分三次写的话，IPTC 那步失败时 EXIF 与 XMP
+    // 已经落盘了，文件处于「一半新一半旧」的状态，而命令只报一个失败。
+    let mut bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => return Outcome::Failed(format!("读取失败：{e}")),
+    };
+
     if !exif_fields.is_empty() {
         let mut metadata = match exif::load_metadata(path) {
             Ok(m) => m,
@@ -1889,22 +1928,24 @@ fn process_apply(path: &Path, fields: &[(String, String)], opts: &WriteOpts) -> 
                 return Outcome::Failed(format!("{e:#}"));
             }
         }
-        if let Err(e) = exif::commit_metadata(path, &metadata, opts) {
+        if let Err(e) = exif::apply_metadata_to_buffer(path, &metadata, &mut bytes) {
             return Outcome::Failed(format!("{e:#}"));
         }
     }
 
-    // 2) XMP（JPEG/PNG）
     if !xmp_edit.is_empty()
-        && let Err(e) = apply_xmp_edit(path, &xmp_edit, opts)
+        && let Err(e) = apply_xmp_edit_to_buffer(&mut bytes, &xmp_edit)
     {
         return Outcome::Failed(format!("{e:#}"));
     }
 
-    // 3) IPTC（JPEG）
     if !iptc_edit.is_empty()
-        && let Err(e) = apply_iptc_edit(path, &iptc_edit, opts)
+        && let Err(e) = apply_iptc_edit_to_buffer(&mut bytes, &iptc_edit)
     {
+        return Outcome::Failed(format!("{e:#}"));
+    }
+
+    if let Err(e) = exif::commit_raw(path, &bytes, opts) {
         return Outcome::Failed(format!("{e:#}"));
     }
 
@@ -1912,35 +1953,31 @@ fn process_apply(path: &Path, fields: &[(String, String)], opts: &WriteOpts) -> 
 }
 
 /// 把 XMP 编辑写入文件（JPEG/PNG 段手术 + 原子落盘）。
-fn apply_xmp_edit(path: &Path, edit: &XmpEdit, opts: &WriteOpts) -> Result<()> {
-    let mut bytes = std::fs::read(path)?;
-    if !xmp::supports_xmp(&bytes) {
+fn apply_xmp_edit_to_buffer(bytes: &mut Vec<u8>, edit: &XmpEdit) -> Result<()> {
+    if !xmp::supports_xmp(bytes) {
         bail!("XMP 仅支持 JPEG/PNG");
     }
-    let existing = xmp::extract_packet_bytes(&bytes);
+    let existing = xmp::extract_packet_bytes(bytes);
     let existing_str = match &existing {
         Some(p) => Some(std::str::from_utf8(p).map_err(|_| anyhow::anyhow!("现有 XMP 非 UTF-8"))?),
         None => None,
     };
     let packet = xmp::apply(existing_str, edit)?;
-    xmp::write_packet(&mut bytes, &packet)?;
-    exif::commit_raw(path, &bytes, opts)
+    xmp::write_packet(bytes, &packet)
 }
 
-/// 把 IPTC 编辑写入文件（JPEG APP13）。
-fn apply_iptc_edit(path: &Path, edit: &IptcEdit, opts: &WriteOpts) -> Result<()> {
-    let mut bytes = std::fs::read(path)?;
+/// 把 IPTC 编辑应用到内存缓冲区（JPEG APP13）。
+fn apply_iptc_edit_to_buffer(bytes: &mut Vec<u8>, edit: &IptcEdit) -> Result<()> {
     if bytes.len() < 2 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
         bail!("IPTC 仅支持 JPEG");
     }
-    let datasets = iptc::apply(&iptc::read_datasets(&bytes), edit);
-    iptc::set_jpeg_iptc(&mut bytes, &datasets)?;
-    exif::commit_raw(path, &bytes, opts)
+    let datasets = iptc::apply(&iptc::read_datasets(bytes), edit);
+    iptc::set_jpeg_iptc(bytes, &datasets)
 }
 
 /// 把 `xmp:` 之后的字段名解析成 (限定名, 值)。既支持完整限定名（含 `:`），
 /// 也支持 title/rating/keywords 等友好简写。
-fn resolve_xmp_field(name: &str, value: &str) -> (String, XmpValue) {
+fn resolve_xmp_field(name: &str, value: &str) -> Result<(String, XmpValue)> {
     // 完整限定名（如 dc:title、photoshop:City）
     if name.contains(':') {
         let v = match name.to_ascii_lowercase().as_str() {
@@ -1949,9 +1986,9 @@ fn resolve_xmp_field(name: &str, value: &str) -> (String, XmpValue) {
             "dc:subject" => XmpValue::Bag(split_multi(value)),
             _ => XmpValue::Simple(value.to_string()),
         };
-        return (name.to_string(), v);
+        return Ok((name.to_string(), v));
     }
-    match name.to_ascii_lowercase().as_str() {
+    Ok(match name.to_ascii_lowercase().as_str() {
         "title" => ("dc:title".into(), XmpValue::LangAlt(value.into())),
         "description" | "caption" => ("dc:description".into(), XmpValue::LangAlt(value.into())),
         "creator" | "author" => ("dc:creator".into(), XmpValue::Seq(split_multi(value))),
@@ -1961,8 +1998,13 @@ fn resolve_xmp_field(name: &str, value: &str) -> (String, XmpValue) {
         "keywords" | "subject" => ("dc:subject".into(), XmpValue::Bag(split_multi(value))),
         "city" => ("photoshop:City".into(), XmpValue::Simple(value.into())),
         "country" => ("photoshop:Country".into(), XmpValue::Simple(value.into())),
-        other => (format!("dc:{other}"), XmpValue::Simple(value.into())),
-    }
+        // 认不出来的裸名字以前会被写成 `dc:<名字>`，于是 `xmp:ttile` 静默生成一个
+        // `dc:ttile` 属性——用户以为改了标题，其实往包里加了个垃圾属性。
+        // 现在直接拒绝；真要写自定义属性，用完整限定名 `xmp:dc:xyz`。
+        other => bail!(
+            "未知的 XMP 字段 `{other}`。可用简称：title、description、creator、rights、             rating、label、keywords、city、country；             要写其它属性请用完整限定名，如 `xmp:dc:{other}` 或 `xmp:photoshop:{other}`"
+        ),
+    })
 }
 
 fn split_multi(s: &str) -> Vec<String> {
@@ -2099,7 +2141,7 @@ pub fn set(args: SetArgs) -> Result<usize> {
         bail!("未指定任何要设置或删除的标签，用 `pic-killer set --help` 查看可用选项");
     }
 
-    let files = collect(&args.target);
+    let files = collect(&args.target)?;
     let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
@@ -2205,7 +2247,7 @@ fn build_set_tags(a: &SetArgs) -> Result<Vec<ExifTag>> {
 // ============================ gps ============================
 
 pub fn gps(args: GpsArgs) -> Result<usize> {
-    let files = collect(&args.target);
+    let files = collect(&args.target)?;
     let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
@@ -2263,7 +2305,7 @@ fn process_gps(path: &Path, args: &GpsArgs, opts: &WriteOpts) -> Outcome {
 // ============================ strip ============================
 
 pub fn strip(args: StripArgs) -> Result<usize> {
-    let files = collect(&args.target);
+    let files = collect(&args.target)?;
     let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
@@ -2384,7 +2426,7 @@ fn strip_xmp_gps(bytes: &mut Vec<u8>) -> Result<bool> {
 pub fn report(args: ReportArgs) -> Result<usize> {
     use std::collections::HashMap;
 
-    let files = collect(&args.target);
+    let files = collect(&args.target)?;
     let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
@@ -2484,7 +2526,7 @@ enum Severity {
 }
 
 pub fn verify(args: VerifyArgs) -> Result<usize> {
-    let files = collect(&args.target);
+    let files = collect(&args.target)?;
     let files = apply_where(files, &args.target.where_expr)?;
     if files.is_empty() {
         println!("未找到符合条件的图片文件。");
@@ -2574,13 +2616,22 @@ fn check_file(path: &Path) -> Vec<(Severity, String)> {
             ));
         }
     }
-    if let Some(fix) = exif::read_gps(&meta)
-        && (!(-90.0..=90.0).contains(&fix.lat) || !(-180.0..=180.0).contains(&fix.lon))
-    {
-        issues.push((
-            Severity::Error,
-            format!("GPS 坐标越界：{:.4}, {:.4}", fix.lat, fix.lon),
-        ));
+    match exif::read_gps(&meta) {
+        Some(fix) if !(-90.0..=90.0).contains(&fix.lat) || !(-180.0..=180.0).contains(&fix.lon) => {
+            issues.push((
+                Severity::Error,
+                format!("GPS 坐标越界：{:.4}, {:.4}", fix.lat, fix.lon),
+            ));
+        }
+        // 有 GPS 标签却读不出坐标 = 数据损坏（分量缺失，或有理数分母为 0）。
+        // read_gps 会把它挡在外面以免污染 JSON 输出，正因如此这里必须单独报出来。
+        None if exif::has_gps_tags(&meta) => {
+            issues.push((
+                Severity::Error,
+                "GPS 标签存在但坐标无法解析（分量缺失或分母为 0）".into(),
+            ));
+        }
+        _ => {}
     }
     if let Some(o) = val("Orientation")
         && let Ok(n) = o.trim().parse::<i64>()
@@ -2611,6 +2662,232 @@ pub fn completions(args: CompletionsArgs) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- 字段名归一化与 apply 字段解析 ----
+
+    #[test]
+    fn field_names_normalize_across_separators() {
+        for spelling in [
+            "gps.clear",
+            "gps-clear",
+            "gps_clear",
+            "GPS Clear",
+            "gpsclear",
+        ] {
+            assert_eq!(normalize_field(spelling), "gpsclear", "拼法 {spelling}");
+        }
+        assert_eq!(normalize_field("  DateTime_Original "), "datetimeoriginal");
+    }
+
+    #[test]
+    fn applyable_fields_cover_what_apply_accepts() {
+        for name in [
+            "Artist",
+            "Copyright",
+            "Make",
+            "Model",
+            "LensModel",
+            "ISO",
+            "FNumber",
+            "ExposureTime",
+            "DateTimeOriginal",
+            "CreateDate",
+            "ModifyDate",
+            "Orientation",
+            "UserComment",
+        ] {
+            assert!(applyable_exif_field(name), "{name} 应当可写回");
+        }
+        // GPS 分量单独成行没有意义（导出时合并成一行 gps），尺寸类是图像属性不是元数据
+        for name in [
+            "GPSLatitude",
+            "GPSLongitudeRef",
+            "ImageWidth",
+            "ExifImageHeight",
+        ] {
+            assert!(!applyable_exif_field(name), "{name} 不该被导出");
+        }
+    }
+
+    #[test]
+    fn iptc_display_names_map_back_to_apply_aliases() {
+        assert_eq!(iptc_apply_alias("City").as_deref(), Some("city"));
+        assert_eq!(iptc_apply_alias("Keywords").as_deref(), Some("keywords"));
+        // 显示名带斜杠时只取前半段作为别名
+        assert_eq!(
+            iptc_apply_alias("Province/State").as_deref(),
+            Some("province")
+        );
+        // apply 不认识的数据集不导出，免得写回时整行失败
+        assert_eq!(iptc_apply_alias("TransmissionRef"), None);
+    }
+
+    #[test]
+    fn unknown_bare_xmp_field_is_rejected_not_silently_prefixed() {
+        let (q, _) = resolve_xmp_field("title", "x").unwrap();
+        assert_eq!(q, "dc:title");
+        // 完整限定名原样透传
+        let (q, _) = resolve_xmp_field("photoshop:Headline", "x").unwrap();
+        assert_eq!(q, "photoshop:Headline");
+        // 打错的简称必须报错，而不是悄悄生成一个 dc:ttile 垃圾属性
+        let err = resolve_xmp_field("ttile", "x").unwrap_err().to_string();
+        assert!(err.contains("ttile"), "错误消息应指出是哪个字段：{err}");
+    }
+
+    #[test]
+    fn xmp_multi_value_fields_get_the_right_container() {
+        assert!(matches!(
+            resolve_xmp_field("keywords", "a;b").unwrap().1,
+            XmpValue::Bag(_)
+        ));
+        assert!(matches!(
+            resolve_xmp_field("creator", "a;b").unwrap().1,
+            XmpValue::Seq(_)
+        ));
+        assert!(matches!(
+            resolve_xmp_field("title", "a").unwrap().1,
+            XmpValue::LangAlt(_)
+        ));
+    }
+
+    #[test]
+    fn multi_value_splits_on_semicolon_and_pipe_only() {
+        assert_eq!(split_multi("a;b|c"), vec!["a", "b", "c"]);
+        // 逗号不是分隔符：CSV 里带逗号的值是被引号包起来的单个值
+        assert_eq!(split_multi("a,b"), vec!["a,b"]);
+        assert_eq!(split_multi(" a ; b "), vec!["a", "b"]);
+        assert!(split_multi("").is_empty());
+    }
+
+    // ---- 时区与时间 ----
+
+    #[test]
+    fn timezone_offsets_parse_in_every_documented_form() {
+        assert_eq!(parse_tz("+08:00").unwrap().local_minus_utc(), 8 * 3600);
+        assert_eq!(
+            parse_tz("-05:30").unwrap().local_minus_utc(),
+            -(5 * 3600 + 1800)
+        );
+        assert_eq!(parse_tz("0800").unwrap().local_minus_utc(), 8 * 3600);
+        assert_eq!(parse_tz("+8").unwrap().local_minus_utc(), 8 * 3600);
+        assert_eq!(parse_tz("Z").unwrap().local_minus_utc(), 0);
+        assert_eq!(parse_tz("utc").unwrap().local_minus_utc(), 0);
+    }
+
+    #[test]
+    fn bad_timezone_errors_instead_of_panicking() {
+        // 4 字节的非 ASCII 输入曾经在按字节切片时 panic
+        for bad in ["😀", "abc", "+99:99", "", "++08"] {
+            assert!(parse_tz(bad).is_err(), "`{bad}` 应当被拒绝");
+        }
+    }
+
+    #[test]
+    fn photo_time_converts_against_the_given_zone() {
+        let naive = parse_datetime("2023-06-15 18:05:00").unwrap();
+        let utc = photo_to_utc(naive, Some(parse_tz("+08:00").unwrap())).unwrap();
+        assert_eq!(utc.to_rfc3339(), "2023-06-15T10:05:00+00:00");
+    }
+
+    #[test]
+    fn csv_datetime_accepts_documented_input_forms() {
+        assert_eq!(
+            datetime_value("2023-06-15 18:05:00").unwrap(),
+            "2023:06:15 18:05:00"
+        );
+        assert_eq!(
+            datetime_value("2023:06:15 18:05:00").unwrap(),
+            "2023:06:15 18:05:00"
+        );
+        assert!(datetime_value("not-a-date").is_err());
+    }
+
+    #[test]
+    fn time_tag_selection_parses_and_rejects() {
+        let all = parse_time_tags("original,digitized,modify").unwrap();
+        assert!(all.original && all.digitized && all.modify);
+        let one = parse_time_tags("original").unwrap();
+        assert!(one.original && !one.digitized && !one.modify);
+        assert!(parse_time_tags("bogus").is_err());
+        assert!(parse_time_tags("").is_err());
+    }
+
+    // ---- rename ----
+
+    #[test]
+    fn rename_pattern_validation_catches_what_would_panic() {
+        assert!(validate_pattern("%Y%m%d_%H%M%S").is_ok());
+        // chrono 格式化非法说明符时会 panic，必须在批处理开跑前拦下
+        assert!(validate_pattern("%Q").is_err());
+        assert!(validate_pattern("").is_err());
+        // 模板只决定文件名，不创建子目录
+        assert!(validate_pattern("sub/%Y").is_err());
+        assert!(validate_pattern("sub\\%Y").is_err());
+    }
+
+    #[test]
+    fn rename_targets_append_a_counter_for_collisions() {
+        let dir = Path::new("/photos");
+        assert_eq!(
+            build_target(dir, "20230115_143022", "jpg", None),
+            dir.join("20230115_143022.jpg")
+        );
+        assert_eq!(
+            build_target(dir, "20230115_143022", "jpg", Some(2)),
+            dir.join("20230115_143022_2.jpg")
+        );
+        // 没有扩展名时不留下孤零零的点
+        assert_eq!(build_target(dir, "shot", "", None), dir.join("shot"));
+        assert_eq!(build_target(dir, "shot", "", Some(1)), dir.join("shot_1"));
+    }
+
+    // ---- sidecar 冲突 ----
+
+    #[test]
+    fn sidecar_collisions_are_detected_before_any_write() {
+        let pair = vec![
+            std::path::PathBuf::from("/p/IMG_0001.CR2"),
+            std::path::PathBuf::from("/p/IMG_0001.JPG"),
+        ];
+        let err = check_sidecar_collisions(&pair).unwrap_err().to_string();
+        assert!(err.contains("IMG_0001"), "错误应指出冲突的文件：{err}");
+
+        let fine = vec![
+            std::path::PathBuf::from("/p/IMG_0001.CR2"),
+            std::path::PathBuf::from("/p/IMG_0002.CR2"),
+        ];
+        assert!(check_sidecar_collisions(&fine).is_ok());
+    }
+
+    // ---- 输出转义 ----
+
+    #[test]
+    fn csv_fields_quote_only_when_needed() {
+        assert_eq!(csv_field("plain"), "plain");
+        assert_eq!(csv_field("has,comma"), "\"has,comma\"");
+        assert_eq!(csv_field("has\"quote"), "\"has\"\"quote\"");
+    }
+
+    #[test]
+    fn json_escapes_control_characters_and_quotes() {
+        assert_eq!(json_escape("plain"), "plain");
+        assert_eq!(json_escape("a\"b"), "a\\\"b");
+        assert_eq!(json_escape("a\\b"), "a\\\\b");
+        assert_eq!(json_escape("a\nb"), "a\\nb");
+        assert_eq!(json_escape("a\tb"), "a\\tb");
+    }
+
+    #[test]
+    fn property_filter_is_case_insensitive_substring() {
+        let props = vec![
+            ("dc:title".to_string(), "x".to_string()),
+            ("xmp:Rating".to_string(), "5".to_string()),
+        ];
+        assert_eq!(filter_props(props.clone(), Some("rating")).len(), 1);
+        assert_eq!(filter_props(props.clone(), Some("RATING")).len(), 1);
+        assert_eq!(filter_props(props.clone(), None).len(), 2);
+        assert_eq!(filter_props(props, Some("nope")).len(), 0);
+    }
 
     #[test]
     fn csv_plain() {

@@ -308,7 +308,7 @@ Results go to standard output; the `--where` filter summary and the progress bar
 |---------|-------|-----|
 | Chinese shows as garbage in the console | Console is not UTF-8 | Run `chcp 65001` |
 | `未找到符合条件的图片文件。` | No file matched the path, extension filter, or `--where` | Check the path spelling; widen `--ext`; test the filter with `show` |
-| A path you passed was ignored with no message | Paths that do not exist are silently skipped | Check the spelling — compare the file count in the header against what you expected |
+| `错误：以下路径不存在` | You named a path that is not on disk | Check the spelling. The run stops before touching anything, so nothing was half-processed |
 | The command printed `已取消。` and did nothing | No `-y`, and no terminal to answer the prompt | Add `-y` |
 | `BMP 无元数据容器，建议先转成 PNG 再处理` | BMP and GIF cannot store metadata | Convert to PNG or JPEG first |
 | A RAW file (CR2, NEF, ARW) cannot be written | The EXIF engine does not parse RAW containers | Use `pic-killer xmp <file> --sidecar …`, which writes a separate `.xmp` and never touches the RAW |

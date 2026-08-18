@@ -93,8 +93,8 @@ Selection rules:
 - A path naming a **file** is always processed, even if its extension is not in `--ext`. Naming a file explicitly is taken as intent.
 - A path naming a **directory** is expanded one level deep; `-r` makes it fully recursive. Only files whose extension is in `--ext` are collected.
 - A path containing `*` or `?` is expanded by PIC-Killer itself, because `cmd` and PowerShell do not expand wildcards for external programs. Expansion covers one directory level and ignores `--ext`, since the pattern is already the filter.
-- Results from all paths are combined, de-duplicated and sorted by path. Sorting is what makes `time --sequential` reproducible.
-- A path that does not exist is skipped without a message. Check the file count in the command header against what you expected.
+- Results from all paths are combined, de-duplicated and sorted in **natural order**: runs of digits compare numerically, so `IMG_2.jpg` precedes `IMG_10.jpg`. This ordering is what makes `time --sequential` both reproducible and correct for numbered photos.
+- A path you name that does not exist is an error, not a silent skip: the run stops before touching anything and lists the offending paths. A wildcard matching nothing is not an error, since a pattern legitimately matches zero files.
 
 ```powershell
 pic-killer show .\photo.jpg
@@ -183,7 +183,7 @@ pic-killer time [options] <--set <time>|--shift <delta>|--sequential <start>|--f
 - `--tags` maps to EXIF as: `original` → `DateTimeOriginal`, `digitized` → `CreateDate`, `modify` → `ModifyDate`.
 - `--shift` skips a file that has no parsable existing capture time — there is nothing to offset from.
 - `--from-name` skips a file whose name contains no recognisable date. A name with a date but no time is given midnight.
-- `--sequential` walks files in the sorted order of §5, so the result is reproducible.
+- `--sequential` walks files in the natural sorted order of §5, so numbered photos increment in the order a person would expect.
 - Offset units are `y` years, `mo` months, `w` weeks, `d` days, `h` hours, `m` minutes, `s` seconds; see §9.6. Months and years are calendar arithmetic.
 
 **Examples**
@@ -872,7 +872,7 @@ EXIF field names accepted without a prefix:
 | Any name from §9.1 | Text |
 | Any name from §9.2 | Number or rational |
 
-> Two traps to know. First, multi-value fields split on **`;` or `|`**, not on commas — unlike the `--keywords` option of §8.9, which splits on commas. A hand-written CSV value of `"a,b,c"` becomes one keyword, not three; write `"a;b;c"`. `--for-apply` emits the `;` form, so exported files round-trip correctly. This applies to `xmp:keywords`, `xmp:creator`, `iptc:keywords` and `iptc:creator`. Second, an unrecognised name after `xmp:` is not rejected; it is written as `dc:<name>`, so a typo such as `xmp:ttile` silently creates a `dc:ttile` property.
+> Two traps to know. First, multi-value fields split on **`;` or `|`**, not on commas — unlike the `--keywords` option of §8.9, which splits on commas. A hand-written CSV value of `"a,b,c"` becomes one keyword, not three; write `"a;b;c"`. `--for-apply` emits the `;` form, so exported files round-trip correctly. This applies to `xmp:keywords`, `xmp:creator`, `iptc:keywords` and `iptc:creator`. Second, a short name after `xmp:` must be one this manual lists; an unrecognised one is rejected with the valid names shown, so a typo such as `xmp:ttile` fails loudly instead of quietly creating a `dc:ttile` property. To write any other property, give the full qualified name, e.g. `xmp:photoshop:Headline`.
 
 ---
 
@@ -1014,7 +1014,7 @@ Messages you are likely to meet:
 - **HEIC, AVIF and JXL are less proven than JPEG.** Use `--backup` or `--dry-run` on a sample before a large batch.
 - **`--where` cannot mix `&&` and `||`.** Both mixing and a negative comparison against an unknown tag name are now refused with an error rather than silently misapplied, but the grammar still has no parentheses or precedence. See §6.
 - **Read-only commands are sequential.** `show`, `report` and `verify` do not use the thread pool, so they are slower than the write commands on large libraries. The `--where` filter itself is parallel.
-- **Nonexistent input paths are skipped silently.** See §5.
+- **`--where` re-reads each file once per condition.** A two-condition expression loads every candidate twice; the filtering itself is parallel, but the I/O is not yet shared between conditions.
 
 ---
 

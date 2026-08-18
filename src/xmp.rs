@@ -114,10 +114,44 @@ fn wrap_array(qname: &str, kind: &str, items: &[String]) -> String {
 
 /// 把编辑应用到（可选的）现有 XMP 包上，返回新包文本。
 pub fn apply(existing: Option<&str>, edit: &XmpEdit) -> Result<String> {
+    // 限定名会被原样拼进 XML 标签里，因此必须先校验，否则一个
+    // `--set "a><script>:x=1"` 就能把结构注进包体。
+    for (qname, _) in &edit.sets {
+        validate_qname(qname)?;
+    }
+    for qname in &edit.removes {
+        validate_qname(qname)?;
+    }
     match existing {
         Some(pkt) if pkt.contains("rdf:Description") => edit_existing(pkt, edit),
         _ => Ok(build_fresh(edit)),
     }
+}
+
+/// 校验 XMP 限定名：`前缀:本地名` 或裸的本地名，两段都必须是合法 NCName。
+///
+/// 限定名不经转义就进入标签位置（`<{qname}>`），值可以转义、名字不行——
+/// 名字只能是白名单字符。
+fn validate_qname(qname: &str) -> Result<()> {
+    fn is_ncname(s: &str) -> bool {
+        let mut chars = s.chars();
+        match chars.next() {
+            Some(c) if c.is_alphabetic() || c == '_' => {}
+            _ => return false,
+        }
+        chars.all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_'))
+    }
+
+    let ok = match qname.split_once(':') {
+        Some((prefix, local)) => is_ncname(prefix) && is_ncname(local),
+        None => is_ncname(qname),
+    };
+    if !ok {
+        bail!(
+            "非法的 XMP 属性名 `{qname}`：应为 `前缀:名称`，两段都只能用字母、数字、`.`、`-`、`_`，且不能以数字开头"
+        );
+    }
+    Ok(())
 }
 
 /// 生成全新的 XMP 包。

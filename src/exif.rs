@@ -430,7 +430,23 @@ pub fn read_gps(metadata: &Metadata) -> Option<GpsFix> {
                 .unwrap_or(false);
             if below { -a } else { a }
         });
+    // 分母为 0 的有理数会算出 NaN/inf。放行的话 `show --json` 会吐出裸的 NaN，
+    // 整份 JSON 文档就此失效；这里当作「读不出坐标」，由 verify 去报告它损坏。
+    if !lat.is_finite() || !lon.is_finite() {
+        return None;
+    }
+    let alt = alt.filter(|a| a.is_finite());
     Some(GpsFix { lat, lon, alt })
+}
+
+/// 文件里是否存在 GPS 坐标标签（无论其内容是否可解析）。
+///
+/// 与 [`read_gps`] 配合可区分「没有 GPS」与「有 GPS 但数据损坏」——后者是 `verify` 要报的问题。
+pub fn has_gps_tags(metadata: &Metadata) -> bool {
+    metadata
+        .get_tag(&ExifTag::GPSLatitude(Vec::new()))
+        .next()
+        .is_some()
 }
 
 /// 删除所有 GPS 标签。
@@ -896,6 +912,62 @@ fn atomic_replace(path: &Path, data: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 分母为 0 的有理数会算出 inf/NaN。放行的话 `show --json` 会写出裸的
+    /// `NaN`，整份 JSON 就不是合法文档了；这里必须当作「读不出坐标」。
+    #[test]
+    fn gps_with_zero_denominator_is_not_returned() {
+        let bad = || {
+            vec![
+                uR64 {
+                    nominator: 30,
+                    denominator: 0,
+                },
+                uR64::from(0u32),
+                uR64::from(0u32),
+            ]
+        };
+        let mut m = Metadata::new();
+        m.set_tag(ExifTag::GPSLatitudeRef("N".to_string()));
+        m.set_tag(ExifTag::GPSLatitude(bad()));
+        m.set_tag(ExifTag::GPSLongitudeRef("E".to_string()));
+        m.set_tag(ExifTag::GPSLongitude(bad()));
+
+        // 标签在，但坐标读不出来 —— verify 正是靠这个组合报告「GPS 数据损坏」
+        assert!(has_gps_tags(&m), "GPS 标签应当被识别为存在");
+        assert!(read_gps(&m).is_none(), "分母为 0 时不应返回坐标");
+    }
+
+    #[test]
+    fn gps_round_trips_through_dms() {
+        let mut m = Metadata::new();
+        for tag in gps_tags(30.2741, 120.1551, Some(12.0)) {
+            m.set_tag(tag);
+        }
+        let fix = read_gps(&m).expect("应能读回坐标");
+        assert!((fix.lat - 30.2741).abs() < 1e-4, "纬度 {}", fix.lat);
+        assert!((fix.lon - 120.1551).abs() < 1e-4, "经度 {}", fix.lon);
+        assert!((fix.alt.unwrap() - 12.0).abs() < 1e-6);
+        assert!(has_gps_tags(&m));
+    }
+
+    #[test]
+    fn southern_and_western_hemispheres_are_negative() {
+        let mut m = Metadata::new();
+        for tag in gps_tags(-33.8688, -151.2093, None) {
+            m.set_tag(tag);
+        }
+        let fix = read_gps(&m).expect("应能读回坐标");
+        assert!(fix.lat < 0.0, "南纬应为负：{}", fix.lat);
+        assert!(fix.lon < 0.0, "西经应为负：{}", fix.lon);
+    }
+
+    #[test]
+    fn no_gps_tags_means_no_fix_and_no_corruption_report() {
+        let m = Metadata::new();
+        assert!(!has_gps_tags(&m));
+        assert!(read_gps(&m).is_none());
+    }
 
     #[test]
     fn rotate_cw_from_normal() {

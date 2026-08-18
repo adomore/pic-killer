@@ -10,9 +10,17 @@ use walkdir::WalkDir;
 /// - 直接给出的文件即使扩展名不在集合内也会被收录（用户明确指定即处理）。
 /// - 目录会被展开；`recursive` 决定是否深入子目录。
 /// - 结果去重并按路径排序，保证序列模式下顺序稳定、可预测。
-pub fn collect_files(inputs: &[PathBuf], exts: &HashSet<String>, recursive: bool) -> Vec<PathBuf> {
+pub struct Collected {
+    /// 实际收集到的图片文件，已去重并按自然顺序排序。
+    pub files: Vec<PathBuf>,
+    /// 用户明确给出、但磁盘上不存在的路径（不含匹配为空的通配符）。
+    pub missing: Vec<PathBuf>,
+}
+
+pub fn collect_files(inputs: &[PathBuf], exts: &HashSet<String>, recursive: bool) -> Collected {
     let mut out: Vec<PathBuf> = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut missing: Vec<PathBuf> = Vec::new();
 
     for input in inputs {
         if input.is_file() {
@@ -33,16 +41,72 @@ pub fn collect_files(inputs: &[PathBuf], exts: &HashSet<String>, recursive: bool
         } else if has_wildcard(input) {
             // 内置通配符展开（Windows 的 cmd/PowerShell 不会为外部程序展开 *.jpg）
             let mut matches = expand_glob(input);
-            matches.sort();
+            matches.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
             for p in matches {
                 push_unique(&mut out, &mut seen, p);
             }
+        } else {
+            // 打错的路径以前会被静默丢掉，退出码还是 0：你以为处理了 200 张，
+            // 其实一张都没碰。通配符匹配为空不算——那是模式，不是路径。
+            missing.push(input.clone());
         }
-        // 不存在的路径静默跳过，由调用方统计报告
     }
 
-    out.sort();
-    out
+    out.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
+    Collected {
+        files: out,
+        missing,
+    }
+}
+
+/// 自然顺序比较：数字段按数值比，其余按字节比。
+///
+/// 纯字节序会把 `IMG_10.jpg` 排在 `IMG_2.jpg` 前面。对 `show` 只是不好看，
+/// 对 `time --sequential` 就是错的——它按这个顺序给照片递增时间戳。
+fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    let (mut x, mut y) = (a.as_bytes(), b.as_bytes());
+    loop {
+        match (x.first(), y.first()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(cx), Some(cy)) => {
+                if cx.is_ascii_digit() && cy.is_ascii_digit() {
+                    let nx = x
+                        .iter()
+                        .position(|c| !c.is_ascii_digit())
+                        .unwrap_or(x.len());
+                    let ny = y
+                        .iter()
+                        .position(|c| !c.is_ascii_digit())
+                        .unwrap_or(y.len());
+                    // 先比去掉前导零后的长度，再逐位比，避免解析成整数时溢出。
+                    let dx = trim_zeros(&x[..nx]);
+                    let dy = trim_zeros(&y[..ny]);
+                    let ord = dx.len().cmp(&dy.len()).then_with(|| dx.cmp(dy));
+                    if ord != Ordering::Equal {
+                        return ord;
+                    }
+                    x = &x[nx..];
+                    y = &y[ny..];
+                } else {
+                    let ord = cx.cmp(cy);
+                    if ord != Ordering::Equal {
+                        return ord;
+                    }
+                    x = &x[1..];
+                    y = &y[1..];
+                }
+            }
+        }
+    }
+}
+
+fn trim_zeros(d: &[u8]) -> &[u8] {
+    let start = d.iter().position(|c| *c != b'0').unwrap_or(d.len());
+    &d[start..]
 }
 
 fn has_wildcard(path: &Path) -> bool {
@@ -145,6 +209,25 @@ mod tests {
     fn glob_question() {
         assert!(glob_match("p?.png", "p1.png"));
         assert!(!glob_match("p?.png", "p12.png"));
+    }
+
+    #[test]
+    fn natural_order_numeric_runs() {
+        use std::cmp::Ordering;
+        assert_eq!(natural_cmp("IMG_2.jpg", "IMG_10.jpg"), Ordering::Less);
+        assert_eq!(natural_cmp("IMG_10.jpg", "IMG_2.jpg"), Ordering::Greater);
+        assert_eq!(natural_cmp("IMG_2.jpg", "IMG_2.jpg"), Ordering::Equal);
+        // 前导零不改变数值大小
+        assert_eq!(natural_cmp("a007", "a7"), Ordering::Equal);
+        assert_eq!(natural_cmp("a008", "a7"), Ordering::Greater);
+        // 超出 u64 的数字段也不会溢出或 panic
+        assert_eq!(
+            natural_cmp("x99999999999999999999999", "x100000000000000000000000"),
+            Ordering::Less
+        );
+        // 非数字部分仍按字节比较
+        assert_eq!(natural_cmp("a.jpg", "b.jpg"), Ordering::Less);
+        assert_eq!(natural_cmp("IMG_1", "IMG_1a"), Ordering::Less);
     }
 
     #[test]

@@ -311,6 +311,46 @@ Assert ($emptyJson -eq "[]") "F-09 空结果 --json 输出 []"
 $emptyCsv = (& $exe show $work --ext "nosuchext" --csv 2>$null | Out-String).Trim()
 Assert ($emptyCsv -eq "file,group,name,hex,value") "F-09 空结果 --csv 只输出表头"
 
+# F-10 apply 必须一次写入。中途某一套元数据失败时，前面的不能已经落盘。
+# PNG 不支持 IPTC，于是 EXIF 成功、IPTC 失败——正好用来验证「要么全写要么不写」。
+MkPng "f10.png"
+$before10 = (Get-FileHash (P "f10.png") -Algorithm SHA256).Hash
+$c10 = P "f10.csv"
+Set-Content -Path $c10 -Encoding utf8 -Value @("file,field,value", ('"' + (P "f10.png") + '",artist,张三'), ('"' + (P "f10.png") + '",iptc:city,北京'))
+$r10 = Run @("apply","--from",$c10,"-y")
+Assert ($r10 -match "\[失败\]") "F-10 不支持的一段导致整条记录失败"
+Assert (((Get-FileHash (P "f10.png") -Algorithm SHA256).Hash) -eq $before10) "F-10 失败时文件字节未变（无半套写入）"
+
+# F-12 xmp: 后面认不出来的简称必须报错，而不是静默生成 dc:<名字>。
+MkJpg "f12.jpg"
+$c12 = P "f12.csv"
+Set-Content -Path $c12 -Encoding utf8 -Value @("file,field,value", ('"' + (P "f12.jpg") + '",xmp:ttile,标题'))
+$r12 = Run @("apply","--from",$c12,"-y")
+Assert ($r12 -match "未知的 XMP 字段") "F-12 未知 xmp 简称被拒绝"
+Assert (-not ((Sh (P "f12.jpg")) -match "dc:ttile")) "F-12 不产生 dc:ttile 垃圾属性"
+
+# F-13 打错的路径不能被静默丢掉。
+$r13 = Run @("show",(P "f12.jpg"),(P "NOSUCHFILE.jpg"))
+Assert ($r13 -match "路径不存在") "F-13 不存在的路径被报出"
+
+# F-15 XMP 限定名会被拼进标签位置，必须校验而不是原样插入。
+$r15 = Run @("xmp",(P "f12.jpg"),"--set","a><evil>:x=1","-y")
+Assert (($r15 -match "非法的 XMP 属性名") -or ($r15 -match "未知的命名空间前缀")) "F-15 非法限定名被拒绝"
+$raw15 = [System.IO.File]::ReadAllBytes((P "f12.jpg"))
+Assert (-not ([System.Text.Encoding]::UTF8.GetString($raw15)).Contains("<evil>")) "F-15 注入内容未进入文件"
+
+# F-18 --sequential 按自然顺序递增，而不是字节序（否则 IMG_10 排在 IMG_2 前面）。
+$natDir = Join-Path $work "natsort"
+[System.IO.Directory]::CreateDirectory($natDir) | Out-Null
+foreach ($n in 1,2,10) {
+  $b=New-Object System.Drawing.Bitmap 16,16
+  $b.Save((Join-Path $natDir ("IMG_{0}.jpg" -f $n)),[System.Drawing.Imaging.ImageFormat]::Jpeg); $b.Dispose()
+}
+Run @("time",$natDir,"--sequential","2021-01-01 00:00:00","--interval","+1h","--ext","jpg","-y") | Out-Null
+Assert ((& $exe show (Join-Path $natDir "IMG_1.jpg")  2>&1 | Out-String) -match "DateTimeOriginal\s+2021:01:01 00:00:00") "F-18 IMG_1 排第一"
+Assert ((& $exe show (Join-Path $natDir "IMG_2.jpg")  2>&1 | Out-String) -match "DateTimeOriginal\s+2021:01:01 01:00:00") "F-18 IMG_2 排第二"
+Assert ((& $exe show (Join-Path $natDir "IMG_10.jpg") 2>&1 | Out-String) -match "DateTimeOriginal\s+2021:01:01 02:00:00") "F-18 IMG_10 排第三（自然序）"
+
 # ---------- 汇总 ----------
 $total = $script:pass + $script:fail
 Write-Host ""
