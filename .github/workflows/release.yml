@@ -11,8 +11,10 @@ on:
         description: "要发布的标签（如 v0.1.0）"
         required: true
 
+# 默认只读。六个 build 作业要跑整棵依赖树的 build.rs 与过程宏，没理由让它们
+# 待在一个对仓库可写的 token 环境里；写权限只发给真正需要创建 release 的那个作业。
 permissions:
-  contents: write
+  contents: read
 
 env:
   BIN: pic-killer
@@ -100,6 +102,11 @@ jobs:
   release:
     name: 发布 Release
     needs: build
+    # 只有这里需要写：创建 release 并上传资产。
+    # 同一次运行内下载产物不需要 actions: read —— download-artifact 的默认
+    # 权限范围已覆盖本次运行，只有跨运行/跨仓库才需要额外的 github-token。
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - name: 下载全部产物
