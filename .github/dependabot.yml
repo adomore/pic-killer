@@ -1,0 +1,24 @@
+# 依赖更新。每周检查一次，把 patch 与 minor 合并成一个 PR，免得噪音淹没仓库。
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        update-types:
+          - minor
+          - patch

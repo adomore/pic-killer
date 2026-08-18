@@ -129,12 +129,71 @@ pub fn parse_expr(expr: &str) -> Result<WhereExpr> {
     Ok(WhereExpr { conditions, any })
 }
 
+/// 一个文件的元数据事实，一次读取得出，供表达式里所有条件复用。
+///
+/// 之前每个条件各自去读一遍文件：`--where "no-gps && no-date"` 对每张照片
+/// 做两次完整加载，`make=Canon && model=X` 更是把整个文件读进来、
+/// 把 EXIF/XMP/IPTC 各解析两遍。条件数越多放大得越厉害。
+pub struct FileFacts {
+    /// (小写名称, 小写值)。预先归一化，省得每个条件各转一次大小写。
+    props: Vec<(String, String)>,
+    has_gps: bool,
+    has_date: bool,
+    has_xmp: bool,
+}
+
+impl FileFacts {
+    /// 读取一个文件并求出全部事实。整份字节只读一次。
+    pub fn read(path: &Path) -> Self {
+        let mut props: Vec<(String, String)> = Vec::new();
+        let (mut has_gps, mut has_date, mut has_xmp) = (false, false, false);
+
+        let bytes = std::fs::read(path).ok();
+        if let Some(bytes) = &bytes {
+            if let Ok(m) = exif::load_metadata_from_bytes(path, bytes) {
+                has_gps = exif::read_gps(&m).is_some();
+                has_date = exif::read_capture_time(&m).is_some();
+                for t in exif::list_tags(&m) {
+                    props.push((t.name.to_ascii_lowercase(), t.value.to_ascii_lowercase()));
+                }
+            }
+            if let Some(pkt) = xmp::extract_packet_bytes(bytes) {
+                has_xmp = true;
+                if let Ok(s) = std::str::from_utf8(&pkt) {
+                    props.extend(
+                        xmp::read_properties(s)
+                            .into_iter()
+                            .map(|(n, v)| (n.to_ascii_lowercase(), v.to_ascii_lowercase())),
+                    );
+                }
+            }
+            props.extend(
+                iptc::read_properties(bytes)
+                    .into_iter()
+                    .map(|(n, v)| (n.to_ascii_lowercase(), v.to_ascii_lowercase())),
+            );
+        }
+
+        Self {
+            props,
+            has_gps,
+            has_date,
+            has_xmp,
+        }
+    }
+
+    /// 是否存在名称包含 `name` 的标签（跨 EXIF / XMP / IPTC）。`name` 需为小写。
+    pub fn has_tag_name(&self, name_lower: &str) -> bool {
+        self.props.iter().any(|(n, _)| n.contains(name_lower))
+    }
+}
+
 impl WhereExpr {
-    pub fn matches(&self, path: &Path) -> bool {
+    pub fn matches(&self, facts: &FileFacts) -> bool {
         if self.any {
-            self.conditions.iter().any(|c| c.matches(path))
+            self.conditions.iter().any(|c| c.matches(facts))
         } else {
-            self.conditions.iter().all(|c| c.matches(path))
+            self.conditions.iter().all(|c| c.matches(facts))
         }
     }
 
@@ -143,7 +202,7 @@ impl WhereExpr {
     /// `!=`、`!~` 与 `no:名称` 都是取反语义：匹配不到任何标签就没有值可比，
     /// 取反后对每个文件都为真。于是 `camera!=Canon`（根本没有 camera 这个标签）
     /// 会选中全部文件——配上 `strip` 就是一个笔误把「一部分」变成「全部」。
-    /// 调用方应当拿这些名字去确认它们至少在某个文件里存在，见 [`tag_name_exists`]。
+    /// 调用方应当拿这些名字去确认它们至少在某个文件里存在，见 [`FileFacts::has_tag_name`]。
     pub fn negative_tag_names(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for c in &self.conditions {
@@ -167,14 +226,6 @@ impl WhereExpr {
     }
 }
 
-/// 该文件里是否存在名称包含 `name` 的标签（跨 EXIF / XMP / IPTC）。
-pub fn tag_name_exists(path: &Path, name: &str) -> bool {
-    let name_l = name.to_ascii_lowercase();
-    all_props(path)
-        .iter()
-        .any(|(n, _)| n.to_ascii_lowercase().contains(&name_l))
-}
-
 fn strip_prefix_ci(s: &str, prefix: &str) -> Option<String> {
     // `get` 而不是索引切片：直接切会在多字节字符中间 panic（如 `--where 😀`）。
     let head = s.get(..prefix.len())?;
@@ -186,78 +237,39 @@ fn strip_prefix_ci(s: &str, prefix: &str) -> Option<String> {
 }
 
 impl Condition {
-    /// 该文件是否满足条件。无法读取的文件按“不满足存在性”处理。
-    pub fn matches(&self, path: &Path) -> bool {
+    /// 该文件是否满足条件。读不出来的文件按“不满足存在性”处理。
+    pub fn matches(&self, facts: &FileFacts) -> bool {
         match self {
-            Condition::HasGps => gps_present(path),
-            Condition::NoGps => !gps_present(path),
-            Condition::HasDate => date_present(path),
-            Condition::NoDate => !date_present(path),
-            Condition::HasXmp => xmp_present(path),
-            Condition::NoXmp => !xmp_present(path),
-            Condition::TagPresence { name, present } => tag_present(path, name) == *present,
-            Condition::Tag { name, op, value } => eval_tag(path, name, op, value),
+            Condition::HasGps => facts.has_gps,
+            Condition::NoGps => !facts.has_gps,
+            Condition::HasDate => facts.has_date,
+            Condition::NoDate => !facts.has_date,
+            Condition::HasXmp => facts.has_xmp,
+            Condition::NoXmp => !facts.has_xmp,
+            Condition::TagPresence { name, present } => {
+                facts.has_tag_name(&name.to_ascii_lowercase()) == *present
+            }
+            Condition::Tag { name, op, value } => eval_tag(facts, name, op, value),
         }
     }
 }
 
-fn gps_present(path: &Path) -> bool {
-    exif::load_metadata(path)
-        .ok()
-        .and_then(|m| exif::read_gps(&m))
-        .is_some()
-}
-
-fn date_present(path: &Path) -> bool {
-    exif::load_metadata(path)
-        .ok()
-        .and_then(|m| exif::read_capture_time(&m))
-        .is_some()
-}
-
-fn xmp_present(path: &Path) -> bool {
-    std::fs::read(path)
-        .ok()
-        .and_then(|b| xmp::extract_packet_bytes(&b))
-        .is_some()
-}
-
-/// 汇总 EXIF + XMP + IPTC 的 (名称, 值) 列表。
-fn all_props(path: &Path) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    if let Ok(m) = exif::load_metadata(path) {
-        for t in exif::list_tags(&m) {
-            out.push((t.name, t.value));
-        }
-    }
-    if let Ok(bytes) = std::fs::read(path) {
-        if let Some(pkt) = xmp::extract_packet_bytes(&bytes)
-            && let Ok(s) = std::str::from_utf8(&pkt)
-        {
-            out.extend(xmp::read_properties(s));
-        }
-        out.extend(iptc::read_properties(&bytes));
-    }
-    out
-}
-
-fn tag_present(path: &Path, name: &str) -> bool {
-    let name_l = name.to_ascii_lowercase();
-    all_props(path)
-        .iter()
-        .any(|(n, _)| n.to_ascii_lowercase().contains(&name_l))
-}
-
-fn eval_tag(path: &Path, name: &str, op: &Op, value: &str) -> bool {
+fn eval_tag(facts: &FileFacts, name: &str, op: &Op, value: &str) -> bool {
     let name_l = name.to_ascii_lowercase();
     let value_l = value.to_ascii_lowercase();
-    let vals: Vec<String> = all_props(path)
-        .into_iter()
-        .filter(|(n, _)| n.to_ascii_lowercase().contains(&name_l))
-        .map(|(_, v)| v.to_ascii_lowercase())
-        .collect();
-    let eq = vals.contains(&value_l);
-    let contains = vals.iter().any(|v| v.contains(&value_l));
+    let mut eq = false;
+    let mut contains = false;
+    for (n, v) in &facts.props {
+        if !n.contains(&name_l) {
+            continue;
+        }
+        if *v == value_l {
+            eq = true;
+        }
+        if v.contains(&value_l) {
+            contains = true;
+        }
+    }
     match op {
         Op::Eq => eq,
         Op::Ne => !eq,

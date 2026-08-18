@@ -71,28 +71,46 @@ fn apply_where(
     let Some(expr) = expr else {
         return Ok(files);
     };
-    let cond = crate::whereexpr::parse_expr(expr)?;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
-    // 护栏：取反类条件（!= / !~ / no:）里的标签名，如果在所有候选文件里一个都没出现，
-    // 几乎必然是笔误。而这种条件遇到不存在的标签名会匹配「全部」文件——配上 strip
-    // 或 --clear，一个拼写错误就从「一部分照片」变成「全部照片」。这里直接中止。
-    for name in cond.negative_tag_names() {
-        let found = files
-            .par_iter()
-            .any(|p| crate::whereexpr::tag_name_exists(p, &name));
-        if !found {
+    let cond = crate::whereexpr::parse_expr(expr)?;
+    let total = files.len();
+
+    // 取反类条件（!= / !~ / no:）里的标签名，如果在所有候选文件里一个都没出现，
+    // 几乎必然是笔误——而这种条件碰上不存在的标签名会匹配「全部」文件。配上
+    // strip 或 --clear，一个拼写错误就把「一部分照片」变成「全部照片」。
+    // 这里顺着筛选那一遍同时记录每个名字有没有被撞见过，跑完再判。
+    let watched = cond.negative_tag_names();
+    let seen: Vec<AtomicBool> = watched.iter().map(|_| AtomicBool::new(false)).collect();
+
+    let kept: Vec<_> = files
+        .into_par_iter()
+        .filter(|p| {
+            // 每个文件只读一次，表达式里所有条件共用这一份事实。
+            let facts = crate::whereexpr::FileFacts::read(p);
+            for (i, name) in watched.iter().enumerate() {
+                if !seen[i].load(Ordering::Relaxed)
+                    && facts.has_tag_name(&name.to_ascii_lowercase())
+                {
+                    seen[i].store(true, Ordering::Relaxed);
+                }
+            }
+            cond.matches(&facts)
+        })
+        .collect();
+
+    // 在返回之前判定，所以任何写入都还没发生。
+    for (i, name) in watched.iter().enumerate() {
+        if !seen[i].load(Ordering::Relaxed) {
             bail!(
-                "--where 里的标签名 `{name}` 在所选 {} 个文件中一个都没匹配到。\n\
+                "--where 里的标签名 `{name}` 在所选 {total} 个文件中一个都没匹配到。\n\
                  取反条件（!= / !~ / no:）碰上不存在的标签名会匹配全部文件，已中止以免误伤。\n\
                  请检查拼写（例如相机厂商的标签名是 make 而不是 camera），\
-                 或先用 `show --where` 确认选中的文件数量符合预期。",
-                files.len()
+                 或先用 `show --where` 确认选中的文件数量符合预期。"
             );
         }
     }
 
-    let total = files.len();
-    let kept: Vec<_> = files.into_par_iter().filter(|p| cond.matches(p)).collect();
     eprintln!("筛选 --where {expr}：{}/{total} 个文件符合条件", kept.len());
     Ok(kept)
 }
@@ -107,28 +125,58 @@ fn write_opts(w: &WriteArgs, preserve_fs_time: bool) -> WriteOpts {
 
 /// 写入前确认（预览或 -y 时直接放行）。
 fn confirm_write(w: &WriteArgs) -> Result<bool> {
+    use std::io::IsTerminal;
+
     if w.dry_run || w.yes {
         return Ok(true);
     }
-    print!("确认执行？[y/N] ");
-    io::stdout().flush().ok();
+    // 没有终端就没人能回答。以前这里会读到 EOF、当成「否」、打印「已取消。」
+    // 然后以 0 退出——脚本看起来成功了，实际什么都没做。报错才是对的。
+    if !io::stdin().is_terminal() {
+        bail!(
+            "需要确认，但标准输入不是终端（脚本、管道或 CI）。\n\
+             自动化场景请加 -y/--yes 明确放行，或先用 -n/--dry-run 预览。"
+        );
+    }
+    // 提示写 stderr：写 stdout 的话，`pic-killer set ... > log.txt` 会把提示
+    // 一起重定向进文件，用户对着一个没有任何提示的空屏幕等着。
+    eprint!("确认执行？[y/N] ");
+    io::stderr().flush().ok();
     let mut line = String::new();
     io::stdin().read_line(&mut line)?;
     let ans = line.trim().to_ascii_lowercase();
     Ok(ans == "y" || ans == "yes")
 }
 
-fn print_outcome(path: &Path, outcome: &Outcome, verbose: bool) {
+/// `-v` 的实际内容：把生效的设置打出来，方便在日志里回答「这次到底是怎么跑的」。
+///
+/// 在此之前 `-v` 是死的——它唯一的分支条件 `verbose || !detail.is_empty()`
+/// 在 detail 非空时恒真，加不加 `-v` 输出完全一样。
+fn print_settings(w: &WriteArgs, file_count: usize) {
+    if !w.verbose {
+        return;
+    }
+    let jobs = match w.jobs {
+        0 => "自动（按 CPU 核数）".to_string(),
+        1 => "1（顺序）".to_string(),
+        n => n.to_string(),
+    };
+    println!(
+        "  设置：文件 {file_count} 个；并行 {jobs}；备份 {}；预览 {}",
+        if w.backup { "开" } else { "关" },
+        if w.dry_run { "开" } else { "关" }
+    );
+}
+
+fn print_outcome(path: &Path, outcome: &Outcome) {
     let name = path.display();
     match outcome {
         Outcome::Changed(detail) => {
-            if detail.is_empty() {
-                println!("[OK]   {name}");
-            } else {
-                println!("[OK]   {name}");
-                if verbose || !detail.is_empty() {
-                    println!("         {detail}");
-                }
+            println!("[OK]   {name}");
+            // 细节行短且有用（「已清除 EXIF + XMP + IPTC」「-> 20190704_091500.jpg」），
+            // 一律显示。`verbose` 控制的是批处理开跑前那段设置摘要，见 print_settings。
+            if !detail.is_empty() {
+                println!("         {detail}");
             }
         }
         Outcome::Skipped(reason) => println!("[跳过] {name}  ({reason})"),
@@ -186,6 +234,7 @@ where
 {
     use rayon::prelude::*;
 
+    print_settings(write, files.len());
     let pb = progress_bar(files.len());
     let run = || {
         files
@@ -220,7 +269,7 @@ where
     let mut stats = Stats::default();
     for (path, outcome) in files.iter().zip(results.iter()) {
         tally(&mut stats, outcome);
-        print_outcome(path, outcome, write.verbose);
+        print_outcome(path, outcome);
     }
     print_summary(&stats, files.len(), write.dry_run);
     stats
@@ -796,27 +845,27 @@ fn show_csv(files: &[std::path::PathBuf], filter: Option<&str>) -> Result<usize>
             }
             println!(
                 "{},{},{},0x{:04X},{}",
-                csv_field(&file),
-                csv_field(&t.group),
-                csv_field(&t.name),
+                csv_field_display(&file),
+                csv_field_display(&t.group),
+                csv_field_display(&t.name),
                 t.hex,
-                csv_field(&t.value)
+                csv_field_display(&t.value)
             );
         }
         for (k, v) in filter_props(read_xmp_props(path), filter) {
             println!(
                 "{},XMP,{},,{}",
-                csv_field(&file),
-                csv_field(&k),
-                csv_field(&v)
+                csv_field_display(&file),
+                csv_field_display(&k),
+                csv_field_display(&v)
             );
         }
         for (k, v) in filter_props(read_iptc_props(path), filter) {
             println!(
                 "{},IPTC,{},,{}",
-                csv_field(&file),
-                csv_field(&k),
-                csv_field(&v)
+                csv_field_display(&file),
+                csv_field_display(&k),
+                csv_field_display(&v)
             );
         }
     }
@@ -857,6 +906,25 @@ fn csv_field(s: &str) -> String {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_string()
+    }
+}
+
+/// 面向人的 CSV 转储专用：额外中和会被表格软件当成公式的前导字符。
+///
+/// README 明说让用户把导出的 CSV 拿去 Excel 编辑，而一个 `=cmd|'/c calc'!A1`
+/// 之类的 UserComment 一打开就会被求值。转储格式加一个前导单引号即可。
+///
+/// **不**用于 `--for-apply`：那是给 `apply` 读回去的交换格式，改动值会破坏闭环
+/// —— 南半球的 GPS 值本来就以 `-` 开头。
+fn csv_field_display(s: &str) -> String {
+    let dangerous = s
+        .chars()
+        .next()
+        .is_some_and(|c| matches!(c, '=' | '+' | '-' | '@' | '\t' | '\r'));
+    if dangerous {
+        csv_field(&format!("'{s}"))
+    } else {
+        csv_field(s)
     }
 }
 
@@ -911,12 +979,29 @@ fn process_rotate(path: &Path, op: RotateOp, opts: &WriteOpts) -> Outcome {
         Ok(m) => m,
         Err(e) => return Outcome::Failed(format!("{e:#}")),
     };
+    let raw = exif::read_orientation_raw(&metadata);
     let current = exif::read_orientation(&metadata);
     let next = exif::compose_orientation(current, op);
-    if next == current {
+    // 存了个越界方向码（`verify` 会报「方向值异常」）时，read_orientation 把它当 1 看，
+    // 于是 `--reset` 算出 next == current 而跳过 —— 用户拿着 verify 的报告来修，
+    // 却被告知「无需修改」，那颗坏值永远留在文件里。这种情况必须写。
+    let broken = raw.is_some_and(|r| !(1..=8).contains(&r));
+    if next == current && !broken {
         return Outcome::Skipped(format!(
             "方向已是「{}」，无需修改",
             exif::orientation_desc(current)
+        ));
+    }
+    if broken {
+        metadata.set_tag(little_exif::exif_tag::ExifTag::Orientation(vec![next]));
+        if let Err(e) = exif::commit_metadata(path, &metadata, opts) {
+            return Outcome::Failed(format!("{e:#}"));
+        }
+        return Outcome::Changed(format!(
+            "修复越界方向值 {} -> {}({})",
+            raw.unwrap_or(0),
+            exif::orientation_desc(next),
+            next
         ));
     }
     metadata.set_tag(little_exif::exif_tag::ExifTag::Orientation(vec![next]));
@@ -1051,6 +1136,8 @@ pub fn rename(args: RenameArgs) -> Result<usize> {
     }
     println!();
 
+    print_settings(&write, files.len());
+
     // 记录已占用的目标路径（磁盘上已存在的 + 本批已分配的），避免冲突
     let mut claimed: std::collections::HashSet<std::path::PathBuf> =
         std::collections::HashSet::new();
@@ -1059,7 +1146,7 @@ pub fn rename(args: RenameArgs) -> Result<usize> {
     for path in &files {
         let outcome = plan_rename(path, &args.pattern, &mut claimed, args.dry_run);
         tally(&mut stats, &outcome);
-        print_outcome(path, &outcome, args.verbose);
+        print_outcome(path, &outcome);
     }
     print_summary(&stats, files.len(), args.dry_run);
     Ok(stats.failed)
@@ -1622,11 +1709,13 @@ pub fn restore(args: RestoreArgs) -> Result<usize> {
     }
     println!();
 
+    print_settings(&write, files.len());
+
     let mut stats = Stats::default();
     for path in &files {
         let outcome = process_restore(path, args.keep_backup, args.dry_run);
         tally(&mut stats, &outcome);
-        print_outcome(path, &outcome, args.verbose);
+        print_outcome(path, &outcome);
     }
 
     println!();
@@ -1654,11 +1743,24 @@ fn process_restore(path: &Path, keep_backup: bool, dry_run: bool) -> Outcome {
     if dry_run {
         return Outcome::Changed("将从 .bak 还原".into());
     }
-    let result = if keep_backup {
-        std::fs::copy(&bak, path).map(|_| ())
-    } else {
-        std::fs::rename(&bak, path)
-    };
+    // 两种模式都走原子替换：`fs::copy` 是就地覆盖，中途断电会留下一个既不是原件
+    // 也不是备份的半截文件 —— 而 restore 恰恰是用户用来自救的最后一招。
+    let result = (|| -> Result<()> {
+        let data = std::fs::read(&bak)?;
+        exif::commit_raw(
+            path,
+            &data,
+            &WriteOpts {
+                dry_run: false,
+                backup: false,
+                preserve_fs_time: false,
+            },
+        )?;
+        if !keep_backup {
+            std::fs::remove_file(&bak)?;
+        }
+        Ok(())
+    })();
     match result {
         Ok(()) => Outcome::Changed(
             if keep_backup {
@@ -2504,17 +2606,45 @@ pub fn report(args: ReportArgs) -> Result<usize> {
     println!("  相机分布：");
     let mut cams: Vec<(&String, &usize)> = cameras.iter().collect();
     cams.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    // 按**显示宽度**而不是字符数对齐：等宽终端里一个汉字占两列，用 chars().count()
+    // 会让「佳能 EOS R5」这类名字整列错位。
     let width = cams
         .iter()
-        .map(|(n, _)| n.chars().count())
+        .map(|(n, _)| display_width(n))
         .max()
         .unwrap_or(0)
         .min(32);
     for (name, count) in cams {
-        println!("    {name:<width$}  {count}");
+        let pad = width.saturating_sub(display_width(name));
+        println!("    {name}{:pad$}  {count}", "");
     }
 
     Ok(0)
+}
+
+/// 字符串在等宽终端里占几列。CJK 与全角标点算两列，其余算一列。
+///
+/// 覆盖 CJK 统一表意文字及扩展 A、兼容表意文字、假名、韩文音节、全角/半角形式区
+/// 以及 CJK 标点 —— 足够本工具会遇到的相机名与地名。
+fn display_width(s: &str) -> usize {
+    s.chars()
+        .map(|c| {
+            let cp = c as u32;
+            let wide = (0x1100..=0x115F).contains(&cp)      // 韩文字母
+                || (0x2E80..=0x303E).contains(&cp)          // CJK 部首、标点
+                || (0x3041..=0x33FF).contains(&cp)          // 假名、注音、兼容字符
+                || (0x3400..=0x4DBF).contains(&cp)          // 扩展 A
+                || (0x4E00..=0x9FFF).contains(&cp)          // 统一表意文字
+                || (0xA000..=0xA4CF).contains(&cp)          // 彝文
+                || (0xAC00..=0xD7A3).contains(&cp)          // 韩文音节
+                || (0xF900..=0xFAFF).contains(&cp)          // 兼容表意文字
+                || (0xFE30..=0xFE6F).contains(&cp)          // CJK 兼容形式
+                || (0xFF00..=0xFF60).contains(&cp)          // 全角形式
+                || (0xFFE0..=0xFFE6).contains(&cp)          // 全角符号
+                || (0x20000..=0x3FFFD).contains(&cp); // 扩展 B 及以后
+            if wide { 2 } else { 1 }
+        })
+        .sum()
 }
 
 // ============================ verify ============================

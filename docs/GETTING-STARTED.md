@@ -148,7 +148,7 @@ pic-killer restore .\photo.jpg
 
 > Two things about `--backup` that surprise people. First, an existing `.bak` is **never** overwritten — so if you edit twice with `--backup`, `restore` takes you back to the *pristine original*, not to the state after the first edit. Second, `restore` deletes the `.bak` afterwards unless you pass `--keep-backup`.
 
-Write commands ask for confirmation unless you pass `-y`. In a script or a pipeline there is no one to answer, so **always pass `-y` in automation** — otherwise the command reads end-of-input, treats it as "no", prints `已取消。`, and exits successfully having done nothing.
+Write commands ask for confirmation unless you pass `-y`. In a script or a pipeline there is no one to answer, so the command **fails with an error** rather than prompting — **always pass `-y` in automation**, or `-n` to preview.
 
 ---
 

@@ -9,9 +9,15 @@
 # --all mode: check every documented pair in this directory.
 if [ "$1" = "--all" ]; then
   here="$(cd "$(dirname "$0")" && pwd)"
+  root="$(cd "$here/.." && pwd)"
   rc=0
   for base in README GETTING-STARTED USER-MANUAL AUDIT FEATURE-RESEARCH; do
     bash "$0" "$here/$base.md" "$here/$base.zh.md" || rc=1
+    echo
+  done
+  # 仓库根目录的双语对也要守同一条铁律
+  for base in CHANGELOG; do
+    bash "$0" "$root/$base.md" "$root/$base.zh.md" || rc=1
     echo
   done
   if [ $rc = 0 ]; then echo "ALL PAIRS IN LOCKSTEP"; else echo "DRIFT DETECTED"; fi
@@ -52,8 +58,10 @@ report "table lines"        "$trow_en"  "$trow_zh"
 report "list items"         "$li_en"    "$li_zh"
 
 # --- section numbering must match --------------------------------------
-n_en=$(grep '^## ' "$en" | sed 's/^## \([0-9]*\)\..*/\1/' | tr '\n' ',')
-n_zh=$(grep '^## ' "$zh" | sed 's/^## \([0-9]*\)\..*/\1/' | tr '\n' ',')
+# 只抽取带编号的小节（`## 3. Foo`）。没有编号的标题——比如 CHANGELOG 的版本号标题
+# ——不参与文本比较，它们的数量已由上面的「## headings」计数覆盖。
+n_en=$(grep '^## ' "$en" | sed -n 's/^## \([0-9][0-9.]*\)\..*/\1/p' | tr '\n' ',')
+n_zh=$(grep '^## ' "$zh" | sed -n 's/^## \([0-9][0-9.]*\)\..*/\1/p' | tr '\n' ',')
 report "## section numbers" "$n_en" "$n_zh"
 
 s_en=$(grep '^### ' "$en" | sed 's/^### \([0-9.]*\).*/\1/' | tr '\n' ',')

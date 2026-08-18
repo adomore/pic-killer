@@ -57,6 +57,21 @@ pub fn load_metadata(path: &Path) -> Result<Metadata> {
     Ok(Metadata::new_from_path(path).unwrap_or_else(|_| Metadata::new()))
 }
 
+/// 从已读入的字节里解析元数据，避免为同一个文件重复读盘。
+///
+/// `--where` 的筛选路径用它：一次 `fs::read` 之后，EXIF、XMP、IPTC 都从同一份
+/// 缓冲区里取，而不是每个条件各读一遍文件。
+// 上游 `Metadata::new_from_vec` 要的就是 `&Vec<u8>`；改成 `&[u8]` 会逼调用方复制一份。
+#[allow(clippy::ptr_arg)]
+pub fn load_metadata_from_bytes(path: &Path, bytes: &Vec<u8>) -> Result<Metadata> {
+    if let Some(hint) = unsupported_hint(path) {
+        bail!("{hint}");
+    }
+    let file_type =
+        get_file_type(path).with_context(|| format!("不支持的文件类型：{}", path.display()))?;
+    Ok(Metadata::new_from_vec(bytes, file_type).unwrap_or_else(|_| Metadata::new()))
+}
+
 /// 严格版读取：EXIF **损坏**时返回 Err；文件本来就没有 EXIF 则返回空元数据。
 ///
 /// `verify` 用它来区分「这张照片没有元数据」与「这张照片的元数据坏了」——
@@ -505,6 +520,17 @@ pub enum RotateOp {
 
 /// 读取当前方向码（1-8），缺省为 1（正常）。
 pub fn read_orientation(metadata: &Metadata) -> u16 {
+    read_orientation_raw(metadata)
+        .filter(|c| (1..=8).contains(c))
+        .unwrap_or(1)
+}
+
+/// 存储的方向码原值，**不**做范围过滤；文件没有该标签时返回 None。
+///
+/// [`read_orientation`] 会把越界值归一成 1，于是 `rotate --reset` 认为「已经是正常了」
+/// 而跳过——那颗坏值就永远留在文件里，`verify` 也就永远报同一个问题。要修它，
+/// 得先能看见它。
+pub fn read_orientation_raw(metadata: &Metadata) -> Option<u16> {
     metadata
         .get_tag(&ExifTag::Orientation(Vec::new()))
         .next()
@@ -512,8 +538,6 @@ pub fn read_orientation(metadata: &Metadata) -> u16 {
             ExifTag::Orientation(v) => v.first().copied(),
             _ => None,
         })
-        .filter(|c| (1..=8).contains(c))
-        .unwrap_or(1)
 }
 
 /// 在当前方向基础上叠加一个操作，返回新的方向码。
@@ -891,23 +915,56 @@ fn atomic_replace(path: &Path, data: &[u8]) -> Result<()> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "output".to_string());
+    // 临时文件名带上进程号与进程内递增序号：固定名字既容易和同目录并发的另一个
+    // pic-killer 撞车，也让别人能预先在那个路径上放一个符号链接等着被写。
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let stem = format!(".{file_name}.{}.{seq}.pkick.tmp", std::process::id());
     let tmp = match dir {
-        Some(d) => d.join(format!(".{file_name}.pkick.tmp")),
-        None => PathBuf::from(format!(".{file_name}.pkick.tmp")),
+        Some(d) => d.join(&stem),
+        None => PathBuf::from(&stem),
     };
 
-    {
-        let mut f =
-            File::create(&tmp).with_context(|| format!("创建临时文件失败：{}", tmp.display()))?;
+    let write_result = (|| -> Result<()> {
+        // create_new：目标已存在就失败，而不是顺着符号链接去写别人的文件。
+        let mut f = File::options()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .with_context(|| format!("创建临时文件失败：{}", tmp.display()))?;
         f.write_all(data)?;
         f.sync_all()?;
+        Ok(())
+    })();
+    if let Err(e) = write_result {
+        // 写到一半失败也不要留下 .pkick.tmp 垃圾。
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
     }
+
     if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
         bail!("重命名覆盖失败：{e}");
     }
+    sync_dir(dir);
     Ok(())
 }
+
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 把目录项本身刷盘，让「改名」这件事也持久化。
+///
+/// 只在 Unix 上做：Windows 不允许把目录当普通文件打开，而 NTFS 的改名本身就是有日志的。
+#[cfg(unix)]
+fn sync_dir(dir: Option<&Path>) {
+    if let Some(d) = dir
+        && let Ok(f) = File::open(d)
+    {
+        let _ = f.sync_all();
+    }
+}
+
+#[cfg(not(unix))]
+fn sync_dir(_dir: Option<&Path>) {}
 
 #[cfg(test)]
 mod tests {

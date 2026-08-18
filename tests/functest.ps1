@@ -351,6 +351,55 @@ Assert ((& $exe show (Join-Path $natDir "IMG_1.jpg")  2>&1 | Out-String) -match 
 Assert ((& $exe show (Join-Path $natDir "IMG_2.jpg")  2>&1 | Out-String) -match "DateTimeOriginal\s+2021:01:01 01:00:00") "F-18 IMG_2 排第二"
 Assert ((& $exe show (Join-Path $natDir "IMG_10.jpg") 2>&1 | Out-String) -match "DateTimeOriginal\s+2021:01:01 02:00:00") "F-18 IMG_10 排第三（自然序）"
 
+# L-01 rotate --reset 必须能修复越界方向值 —— 那正是 verify 会报的问题。
+# 越界值只能由别的软件或损坏产生，CLI 自己写不进去，所以这里按字节打补丁造出来。
+MkJpg "l01.jpg"
+Run @("set",(P "l01.jpg"),"--orientation","cw90","-y") | Out-Null
+$ob = [System.IO.File]::ReadAllBytes((P "l01.jpg"))
+$le = @(0x12,0x01,0x03,0x00,0x01,0x00,0x00,0x00,0x06,0x00)
+$be = @(0x01,0x12,0x00,0x03,0x00,0x00,0x00,0x01,0x00,0x06)
+$hit = -1; $which = ""
+for ($i=0; $i -le $ob.Length-10; $i++) {
+  $okLE = $true; $okBE = $true
+  for ($k=0; $k -lt 10; $k++) {
+    if ($ob[$i+$k] -ne $le[$k]) { $okLE = $false }
+    if ($ob[$i+$k] -ne $be[$k]) { $okBE = $false }
+  }
+  if ($okLE) { $hit = $i; $which = "LE"; break }
+  if ($okBE) { $hit = $i; $which = "BE"; break }
+}
+Assert ($hit -ge 0) "L-01 前置：定位到 Orientation 条目"
+if ($hit -ge 0) {
+  if ($which -eq "LE") { $ob[$hit+8] = 0x63 } else { $ob[$hit+9] = 0x63 }
+  [System.IO.File]::WriteAllBytes((P "l01.jpg"), $ob)
+  Assert ((Run @("verify",(P "l01.jpg"))) -match "方向值异常：99") "L-01 verify 检出越界方向值"
+  Assert ((Run @("rotate",(P "l01.jpg"),"--reset","-y")) -match "修复越界方向值") "L-01 rotate --reset 修复它"
+  Assert ((Run @("verify",(P "l01.jpg"))) -match "正常 1") "L-01 修复后 verify 干净"
+}
+
+# L-02 没有终端又没给 -y 时，必须报错，而不是静默地什么都不做还报成功。
+MkJpg "l02.jpg"
+$l02 = (($null | & $exe set (P "l02.jpg") --artist X 2>&1) | Out-String)
+Assert ($l02 -match "标准输入不是终端") "L-02 非交互环境缺 -y 时报错"
+Assert (-not ((Sh (P "l02.jpg")) -match "Artist\s+X")) "L-02 报错时确实没有写入"
+
+# L-03 转储 CSV 会被拿去 Excel 打开，公式前缀必须中和；
+# 而 --for-apply 是交换格式，值必须逐字保留（南半球 GPS 就以 - 开头）。
+MkJpg "l03.jpg"
+Run @("set",(P "l03.jpg"),"--user-comment","=cmd|calc!A1","-y") | Out-Null
+Run @("gps",(P "l03.jpg"),"--lat","-33.8688","--lon","151.2093","-y") | Out-Null
+$dump = (& $exe show (P "l03.jpg") --csv 2>$null | Out-String)
+Assert ($dump -match "'=cmd") "L-03 转储 CSV 中和公式前缀"
+$fa = (& $exe show (P "l03.jpg") --csv --for-apply 2>$null | Out-String)
+Assert ($fa -match '"-33\.868800,151\.209300"') "L-03 --for-apply 保留负号不加引号前缀"
+
+# L-04 -v 之前是死的（唯一分支条件恒真），现在应当真的多输出一行设置摘要。
+MkJpg "l04.jpg"
+$plain = Run @("set",(P "l04.jpg"),"--software","A","-y")
+$verb  = Run @("set",(P "l04.jpg"),"--software","B","-y","-v")
+Assert (-not ($plain -match "并行")) "L-04 不带 -v 时无设置摘要"
+Assert ($verb -match "并行") "L-04 带 -v 时输出设置摘要"
+
 # ---------- 汇总 ----------
 $total = $script:pass + $script:fail
 Write-Host ""

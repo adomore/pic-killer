@@ -141,14 +141,14 @@ pic-killer geotag .\photos -r --gpx .\t.gpx --tz +08:00 --where no-gps
 | `--backup` | — | off | Copy each file to `<name>.bak` before writing |
 | `-n`, `--dry-run` | — | off | Report what would change; write nothing |
 | `-y`, `--yes` | — | off | Skip the confirmation prompt |
-| `-v`, `--verbose` | — | off | Print more detail per file |
+| `-v`, `--verbose` | — | off | Print a settings summary before the batch |
 | `-j`, `--jobs` | integer | `0` | Worker threads: `0` = one per CPU core, `1` = sequential |
 
 Notes on each:
 
 - `--backup` never overwrites an existing `.bak`. After two backed-up edits, `restore` returns the file to its **pristine original**, not to the state after the first edit. This is deliberate — the first backup is the only one guaranteed to be untouched by PIC-Killer.
 - `-n` short-circuits inside the write path, after all parsing and metadata reading, so a dry run exercises the same code that a real run does and reports the same skips and failures.
-- Without `-y`, write commands prompt for confirmation on standard input. **In a script, a pipeline, or any context without a terminal, the prompt reads end-of-input, is treated as "no", prints `已取消。` and exits 0 having changed nothing.** Always pass `-y` in automation.
+- Without `-y`, write commands prompt for confirmation on standard input, writing the prompt to standard error so it stays visible when standard output is redirected. **When standard input is not a terminal — a script, a pipeline, CI — the command fails with an error rather than prompting.** Pass `-y` in automation, or `-n` to preview. Earlier versions read end-of-input, treated it as "no", and exited 0 having changed nothing, which made a broken automation look successful.
 - `-j` builds a dedicated thread pool for values other than `0` and `1`. Because each file is written independently to its own temporary file, parallel writing is safe.
 - `rename` and `restore` accept `-n`, `-y` and `-v` but not `--backup` or `-j`.
 
@@ -222,6 +222,7 @@ pic-killer show [options] <paths...>
 - A file with nothing readable prints `(无匹配的元数据)`.
 - When nothing matches, `--json` prints `[]` and `--csv` prints the header alone; the human-readable notice goes to standard error so the output stays parseable.
 - `--csv` alone is a *dump* format — it carries the IFD group and hex code, and splits GPS into its component tags, so it cannot be fed back to `apply`. Use `--csv --for-apply` for the round trip; see §10.
+- Because the dump is meant to be opened in a spreadsheet, a value beginning with `=`, `+`, `-`, `@` or a tab is prefixed with an apostrophe so the spreadsheet does not evaluate it as a formula. `--for-apply` deliberately does **not** do this: it is an interchange format, and a southern-hemisphere GPS value legitimately starts with `-`.
 - A sidecar `.xmp` is read and shown automatically, including for files whose own container cannot be parsed.
 - `--filter` narrows the tag list in all three metadata systems. The decoded GPS line is *not* filtered — it is printed whenever the file has coordinates.
 - Output formats are specified in §11.
@@ -349,7 +350,7 @@ pic-killer rotate [options] <--cw|--ccw|--r180|--flip-h|--flip-v|--reset> <paths
 | `--r180` | — | — | Rotate 180° |
 | `--flip-h` | — | — | Mirror horizontally |
 | `--flip-v` | — | — | Mirror vertically |
-| `--reset` | — | — | Set orientation back to normal |
+| `--reset` | — | — | Set orientation back to normal, and repair an out-of-range value |
 
 **Behavior**
 
@@ -1014,7 +1015,7 @@ Messages you are likely to meet:
 - **HEIC, AVIF and JXL are less proven than JPEG.** Use `--backup` or `--dry-run` on a sample before a large batch.
 - **`--where` cannot mix `&&` and `||`.** Both mixing and a negative comparison against an unknown tag name are now refused with an error rather than silently misapplied, but the grammar still has no parentheses or precedence. See §6.
 - **Read-only commands are sequential.** `show`, `report` and `verify` do not use the thread pool, so they are slower than the write commands on large libraries. The `--where` filter itself is parallel.
-- **`--where` re-reads each file once per condition.** A two-condition expression loads every candidate twice; the filtering itself is parallel, but the I/O is not yet shared between conditions.
+- **XMP and IPTC writes are capped at one JPEG segment.** A packet larger than roughly 64 KB cannot be written; multi-segment ExtendedXMP is not implemented.
 
 ---
 
