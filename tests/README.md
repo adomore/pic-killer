@@ -21,6 +21,13 @@ cargo build --release          # 在仓库根目录
 .\tests\perftest.ps1           # 期望：性能测试 4/4 通过，退出码 0
 ```
 
+如果报 `无法加载文件……在此系统上禁止运行脚本`，那是机器的执行策略拦下的，与测试本身无关。
+绕开它而不改全局设置：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\functest.ps1
+```
+
 - 二进制路径按 `..\target\release\pic-killer.exe`（相对本目录）解析；测试用的临时图片写在
   `%TEMP%\pic-killer-functest` / `%TEMP%\pic-killer-perftest`，不污染仓库。
 - 脚本以 **UTF-8 BOM** 保存：Windows PowerShell 5.1 读无 BOM 的 `.ps1` 会按 GBK 解码导致中文乱码，

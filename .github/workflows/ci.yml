@@ -52,6 +52,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: 构建 release 二进制
         run: cargo build --release --locked
+      # 显式 -ExecutionPolicy Bypass：直接跑 .ps1 要看机器的执行策略脸色，
+      # 策略收紧时报的是一条与测试无关的 SecurityError，排查起来很浪费时间。
       - name: 运行端到端断言
-        shell: powershell
-        run: .\tests\functest.ps1
+        shell: cmd
+        run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\functest.ps1
