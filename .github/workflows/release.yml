@@ -86,7 +86,7 @@ jobs:
           fi
 
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: ${{ steps.package.outputs.asset }}
@@ -98,7 +98,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 下载全部产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
@@ -110,9 +110,11 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: 创建 Release 并上传
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: artifacts/*
           generate_release_notes: true
           fail_on_unmatched_files: true
+          # 带连字符的语义化版本后缀（v1.0.1-rc1）即预发布，不要抢占 "Latest release"。
+          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
