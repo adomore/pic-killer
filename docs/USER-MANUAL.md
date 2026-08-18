@@ -55,7 +55,7 @@ cargo build --release
 cargo install --path .
 ```
 
-The crate declares `edition = "2024"`, which requires Rust 1.85 or newer.
+The crate requires Rust 1.88 or newer. Edition 2024 alone would only need 1.85, but the code uses let-chains, stabilised in 1.88; a CI job compiles against exactly that version so the number cannot drift.
 
 ---
 

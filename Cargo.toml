@@ -2,8 +2,9 @@
 name = "pic-killer"
 version = "1.0.0"
 edition = "2024"
-# edition 2024 需要 1.85+。写明后 cargo 会强制检查，README 的说法也就有了约束。
-rust-version = "1.85"
+# 下界由 let-chain 决定（1.88 稳定），不是 edition 2024 的 1.85 —— 代码里有 12 处
+# `&& let` 写法，用 1.87 编译会得到 E0658。CI 的 msrv 作业会守住这个数。
+rust-version = "1.88"
 
 [dependencies]
 anyhow = "1.0.103"
@@ -14,7 +15,7 @@ clap_mangen = "0.3.0"
 filetime = "0.2.29"
 indicatif = "0.18.6"
 little_exif = "0.6.23"
-quick-xml = "0.37.5"
+quick-xml = "0.41.0"
 rayon = "1.12.0"
 walkdir = "2.5.0"
 

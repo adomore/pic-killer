@@ -64,14 +64,38 @@ broken while all six release gates passed. Everything below closes those finding
 - `show --csv --for-apply` — three-column export that `apply` reads back.
 - `docs/` — a getting-started guide, user manual, audit report and feature research, as
   structurally mirrored EN/ZH pairs, with `check-parity.sh` enforcing the lockstep.
-- `rust-version = "1.85"` in `Cargo.toml`.
+- `rust-version = "1.88"` in `Cargo.toml`, enforced by a CI job that compiles against exactly that version. An earlier commit in this cycle set it to 1.85 on the reasoning that edition 2024 requires 1.85; that was wrong — the code uses let-chains, stabilised in 1.88, and 1.87 rejects it with E0658.
 - Dependabot configuration for Cargo and GitHub Actions.
 
 ### Changed
 
 - `--where` reads each file once instead of once per condition, and filters in parallel.
-- CI runs the end-to-end suite (`tests/functest.ps1`) on `windows-latest`.
+- CI runs the end-to-end suite (`tests/functest.ps1`) on `windows-latest`, and gained jobs for the minimum supported Rust version and for dependency advisories.
+- `actions/checkout` v4 → v7 across both workflows, clearing the Node 20 deprecation warning that appeared on every job. A byte-level diff of the two `action.yml` files shows a single differing line (`using: node20` → `node24`); every input is identical.
+- Release actions bumped and validated with a real pre-release run: `upload-artifact` v4 → v7, `download-artifact` v4 → v8, `action-gh-release` v2 → v3. A tag containing a hyphen is now published as a pre-release.
 - Tests: 51 → 73 unit tests, 59 → 103 end-to-end assertions.
+
+### Security
+
+- **Command injection in the release workflow.** The packaging step interpolated the
+  `workflow_dispatch` tag input directly into a shell string (`version="${{ ... }}"`).
+  GitHub substitutes expressions before the shell parses the line, so an input such as
+  `v1.0.0"; curl … | sh; :"` would execute, in a job holding a repository-writable
+  `GITHUB_TOKEN`. The value now travels through an environment variable. Only accounts
+  with write access can trigger `workflow_dispatch`, so this was a privilege-escalation
+  path for a compromised or limited-write account rather than an anonymous one.
+- **quick-xml 0.37.5 → 0.41.0**, the patched floor for RUSTSEC-2026-0194 (quadratic
+  duplicate-attribute scanning, a denial of service on attacker-supplied XMP) and
+  RUSTSEC-2026-0195. This project's own two `attributes()` call sites leave the affected
+  range. **It does not make the project unaffected:** `little_exif` 0.6.23 pins
+  `quick-xml ^0.37.5`, so a second copy stays in the tree, and it is reachable — that
+  crate's own `src/xmp.rs` calls `attributes()` on the PNG EXIF-clearing path. Binary
+  size grows 35,840 bytes (+1.0%). The duplicate disappears once upstream moves.
+- CI gained a `cargo audit` job. Both advisories were published 2026-06-29 and went
+  unnoticed here for two months because nothing checked. The two known-unfixable ones are
+  ignored by ID, so a *new* advisory still fails the build.
+- CI declares `permissions: contents: read`; the workflow previously inherited whatever
+  the repository default granted.
 
 ## [1.0.0] — 2026-07-11
 

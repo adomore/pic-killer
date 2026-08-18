@@ -10,6 +10,7 @@ use std::io::Write as _;
 use std::path::Path;
 
 use anyhow::{Result, bail};
+use quick_xml::XmlVersion;
 use quick_xml::escape::escape;
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::name::QName;
@@ -293,7 +294,7 @@ fn rebuild_desc_start(e: &BytesStart, edit: &XmpEdit) -> Result<BytesStart<'stat
         let attr = attr.map_err(|err| anyhow::anyhow!("XMP 属性解析失败：{err}"))?;
         let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
         let value = attr
-            .unescape_value()
+            .normalized_value(XmlVersion::Implicit1_0)
             .map_err(|err| anyhow::anyhow!("XMP 属性解码失败：{err}"))?;
 
         if key.starts_with("xmlns:") || key == "xmlns" {
@@ -386,7 +387,7 @@ fn collect_attr_props(e: &BytesStart, out: &mut Vec<(String, String)>) {
         if key.starts_with("xmlns") || key == "rdf:about" {
             continue;
         }
-        if let Ok(v) = attr.unescape_value() {
+        if let Ok(v) = attr.normalized_value(XmlVersion::Implicit1_0) {
             out.push((key, v.to_string()));
         }
     }
@@ -400,7 +401,7 @@ fn extract_text(inner: &str) -> String {
     loop {
         match reader.read_event() {
             Ok(Event::Text(t)) => {
-                if let Ok(s) = t.unescape() {
+                if let Ok(s) = t.xml10_content() {
                     let s = s.trim();
                     if !s.is_empty() {
                         parts.push(s.to_string());

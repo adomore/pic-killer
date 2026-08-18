@@ -56,14 +56,33 @@ PIC-Killer 的全部重要变更都记录在此。格式遵循
 - `show --csv --for-apply` —— `apply` 能读回去的三列导出。
 - `docs/` —— 新手入门手册、用户手册、审计报告与功能预研，均为结构镜像的 EN/ZH 双语对，
   由 `check-parity.sh` 强制保持同步。
-- `Cargo.toml` 增加 `rust-version = "1.85"`。
+- `Cargo.toml` 增加 `rust-version = "1.88"`，并由一个专门用该版本编译的 CI 作业守住。本轮早先的提交曾按「edition 2024 需要 1.85」把它设成 1.85，那是错的 —— 代码使用了 1.88 才稳定的 let-chain，1.87 会以 E0658 拒绝编译。
 - 针对 Cargo 与 GitHub Actions 的 Dependabot 配置。
 
 ### 变更
 
 - `--where` 每个文件只读一次（而非每个条件读一次），并且并行筛选。
-- CI 在 `windows-latest` 上运行端到端测试（`tests/functest.ps1`）。
+- CI 在 `windows-latest` 上运行端到端测试（`tests/functest.ps1`），并新增最低 Rust 版本作业与依赖公告作业。
+- 两个工作流的 `actions/checkout` 由 v4 升到 v7，消除每个作业都会出现的 Node 20 弃用告警。两份 `action.yml` 做字节级比对只有一行不同（`using: node20` → `node24`），输入项完全一致。
+- release 用到的 action 升级并已用一次真实预发布验证：`upload-artifact` v4 → v7、`download-artifact` v4 → v8、`action-gh-release` v2 → v3。带连字符的 tag 现在会被发布为预发布版。
 - 测试：单元测试 51 → 73，端到端断言 59 → 103。
+
+### 安全
+
+- **release 工作流存在命令注入。** 打包步骤把 `workflow_dispatch` 的 tag 输入直接内插进
+  shell 字符串（`version="${{ ... }}"`）。GitHub 的表达式替换发生在 shell 解析之前，
+  所以 `v1.0.0"; curl … | sh; :"` 这样的输入会被执行，而该作业持有对仓库可写的
+  `GITHUB_TOKEN`。现在该值改经环境变量传入。只有具备 write 权限的账号能触发
+  `workflow_dispatch`，因此这是「已有写权限或账号被盗」的提权路径，不是匿名攻击面。
+- **quick-xml 0.37.5 → 0.41.0**，这正是 RUSTSEC-2026-0194（重复属性名检查的平方级扫描，
+  面对构造过的 XMP 可造成拒绝服务）与 RUSTSEC-2026-0195 的补丁下界。本项目自己那两处
+  `attributes()` 调用点因此脱离受影响范围。**但这不等于本项目不受影响：**
+  `little_exif` 0.6.23 锁着 `quick-xml ^0.37.5`，依赖树里仍有第二份，而且它可达 ——
+  该 crate 自己的 `src/xmp.rs` 在 PNG 清除 EXIF 的路径上同样调用了 `attributes()`。
+  二进制增加 35,840 字节（+1.0%）。上游跟进后这一份会自动消失。
+- CI 新增 `cargo audit` 作业。上述两条公告发布于 2026-06-29，在此之前两个月无人知晓，
+  就是因为没有任何环节检查。两条已知无法修复的按编号忽略，**新出现**的公告仍会让构建失败。
+- CI 声明 `permissions: contents: read`；此前它继承的是仓库默认授予的任何权限。
 
 ## [1.0.0] —— 2026-07-11
 

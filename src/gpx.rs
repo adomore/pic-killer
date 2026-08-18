@@ -7,6 +7,7 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
+use quick_xml::XmlVersion;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
@@ -50,7 +51,7 @@ fn parse_str(data: &str) -> Result<Vec<TrackPoint>> {
                     time = None;
                     for attr in e.attributes().flatten() {
                         let key = attr.key.local_name();
-                        let val = attr.unescape_value().ok();
+                        let val = attr.normalized_value(XmlVersion::Implicit1_0).ok();
                         match key.as_ref() {
                             b"lat" => lat = val.and_then(|v| v.parse().ok()),
                             b"lon" => lon = val.and_then(|v| v.parse().ok()),
@@ -65,7 +66,7 @@ fn parse_str(data: &str) -> Result<Vec<TrackPoint>> {
             }
             Ok(Event::Text(t)) => {
                 if let Some(field) = text_target.take() {
-                    let raw = t.unescape().unwrap_or_default();
+                    let raw = t.xml10_content().unwrap_or_default();
                     let s = raw.trim();
                     match field {
                         Field::Time => {

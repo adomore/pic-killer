@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# 只读即可；发布所需的写权限只存在于 release.yml。
+permissions:
+  contents: read
+
 # 同一分支的新推送会取消尚在运行的旧任务
 concurrency:
   group: ci-${{ github.ref }}
@@ -15,7 +19,7 @@ jobs:
     name: 格式 + Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: 安装 Rust（含 rustfmt、clippy）
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -34,7 +38,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: 运行测试
@@ -47,7 +51,7 @@ jobs:
     name: 端到端（functest.ps1）
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: 构建 release 二进制
@@ -57,3 +61,33 @@ jobs:
       - name: 运行端到端断言
         shell: cmd
         run: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\functest.ps1
+
+  # README 承诺 Rust 1.88+，但此前从没有任何东西验证过这个数字。
+  # 下界由 let-chain 决定（1.88 稳定），不是 edition 2024 的 1.85。
+  msrv:
+    name: 最低 Rust 版本（1.88）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+      - name: 按最低版本编译
+        run: cargo check --locked --all-features --all-targets
+
+  # 依赖安全公告。两条 quick-xml 公告（2026-06-29）我们两个月无人告知，
+  # 就是因为这一步不存在。
+  audit:
+    name: 依赖安全公告
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 安装 cargo-audit
+        run: cargo install cargo-audit --locked
+      # 显式忽略的两条：我们的直接依赖已升到 0.41.0（补丁下界），但
+      # little_exif 0.6.23 自身锁着 quick-xml ^0.37.5，依赖树里那一份我们改不动。
+      # 逐条列出而不是整体关闭，好让**新出现**的公告仍然能把 CI 拦红。
+      # 上游 https://github.com/TechnikTobi/little_exif 跟进后应删掉这两行。
+      - name: 检查公告
+        run: cargo audit --deny warnings --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195

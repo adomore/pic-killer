@@ -33,7 +33,7 @@ jobs:
           - { os: macos-latest,   target: x86_64-apple-darwin }
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
@@ -62,10 +62,15 @@ jobs:
       - name: 打包
         id: package
         shell: bash
+        # DISPATCH_TAG 经环境变量传入，不要直接内插进脚本：表达式替换发生在 shell
+        # 解析之前，`v1.0.0"; curl … | sh; :"` 这样的输入会被展开成可执行的 shell，
+        # 而本作业拿得到可写仓库的 GITHUB_TOKEN。
+        env:
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            version="${{ github.event.inputs.tag }}"
+            version="$DISPATCH_TAG"
           else
             version="${GITHUB_REF_NAME}"
           fi

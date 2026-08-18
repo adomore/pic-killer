@@ -69,7 +69,7 @@ sha256sum -c SHA256SUMS.txt
 
 ### 从源码构建
 
-需要 Rust 1.85+（edition 2024）：
+需要 Rust 1.88+（代码使用 let-chain）：
 
 ```bash
 git clone https://github.com/adomore/pic-killer.git
