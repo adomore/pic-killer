@@ -94,7 +94,10 @@ broken while all six release gates passed. Everything below closes those finding
   filed as TechnikTobi/little_exif#104.
 - CI gained a `cargo audit` job. Both advisories were published 2026-06-29 and went
   unnoticed here for two months because nothing checked. The two known-unfixable ones are
-  ignored by ID, so a *new* advisory still fails the build.
+  ignored by ID — three of them, all tracing to `little_exif` 0.6.23: the two quick-xml
+  advisories plus RUSTSEC-2024-0436 (`paste` unmaintained, a maintenance notice rather
+  than a vulnerability). Listing IDs rather than relaxing `--deny warnings` keeps a *new*
+  advisory failing the build.
 - CI declares `permissions: contents: read`; the workflow previously inherited whatever
   the repository default granted.
 - The release workflow no longer grants `contents: write` to every job. All six build

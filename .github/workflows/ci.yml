@@ -85,9 +85,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: 安装 cargo-audit
         run: cargo install cargo-audit --locked
-      # 显式忽略的两条：我们的直接依赖已升到 0.41.0（补丁下界），但
-      # little_exif 0.6.23 自身锁着 quick-xml ^0.37.5，依赖树里那一份我们改不动。
-      # 逐条列出而不是整体关闭，好让**新出现**的公告仍然能把 CI 拦红。
-      # 上游 https://github.com/TechnikTobi/little_exif 跟进后应删掉这两行。
+      # 三条忽略全部指向同一个根因：little_exif 0.6.23。逐条按 ID 列出而不是整体
+      # 关闭 --deny warnings，好让**新出现**的公告仍然能把 CI 拦红。
+      # 上游 https://github.com/TechnikTobi/little_exif/issues/104 一旦发版，
+      # 这三行应当一并删掉并复跑本作业确认。
+      #
+      #   0194 / 0195  quick-xml：我们的直接依赖已升到 0.41.0（补丁下界），但
+      #                little_exif 锁着 ^0.37.5，树里那一份改不动。
+      #   2024-0436    paste 已停止维护（是维护性警告，不是漏洞）。同样由
+      #                little_exif 引入，`cargo tree -i paste` 可确认。
       - name: 检查公告
-        run: cargo audit --deny warnings --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
+        run: |
+          cargo audit --deny warnings \
+            --ignore RUSTSEC-2026-0194 \
+            --ignore RUSTSEC-2026-0195 \
+            --ignore RUSTSEC-2024-0436
