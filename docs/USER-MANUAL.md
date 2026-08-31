@@ -1001,7 +1001,7 @@ Messages you are likely to meet:
 | `未知方向 ...` | Not one of the keywords or codes in §9.5 |
 | `--rating 需在 0-5 之间` | `xmp --rating` accepts 0 to 5 only |
 | `未知的命名空间前缀 ...` | `xmp --set` requires a prefix from §9.3 |
-| `未知或暂不支持的字段 ...` | A CSV field name that `apply` does not recognise; see §10 |
+| `未知的 EXIF 字段 ...` / `未知的 XMP 字段 ...` / `未知 IPTC 字段 ...` | A CSV field name that `apply` does not recognise. The EXIF form points at the `xmp:` and `iptc:` prefixes; the XMP form lists the valid short names. See §10 |
 
 ---
 

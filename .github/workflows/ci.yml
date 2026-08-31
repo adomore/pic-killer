@@ -30,6 +30,16 @@ jobs:
       - name: Clippy（警告即失败）
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+  # EN/ZH 铁律。之前这条只靠人记得手工跑 check-parity.sh，于是双语文档一路漂到
+  # 「同一份报告里两处结论互相打架」才被发现。e2e 已经进 CI 了，同样的道理适用于它。
+  docs:
+    name: 文档 EN/ZH 对照
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: 检查每一对双语文档是否同步
+        run: bash docs/check-parity.sh --all
+
   test:
     name: 测试 ${{ matrix.os }}
     strategy:
@@ -44,7 +54,7 @@ jobs:
       - name: 运行测试
         run: cargo test --all-features --locked
 
-  # 端到端门禁。cargo test 只跑得到纯逻辑模块，占生产代码 41% 的 commands.rs
+  # 端到端门禁。cargo test 只跑得到纯逻辑模块，占生产代码 43% 的 commands.rs
   # 编排层全靠这一套断言兜底；不进 CI 就等于没有回归保护。
   # 脚本依赖 PowerShell + System.Drawing，因此只能在 Windows 上跑。
   e2e:

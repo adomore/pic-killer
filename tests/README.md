@@ -1,35 +1,37 @@
-# 发版门禁测试脚本
+# Release gate test scripts
 
-发布前手动跑的两套断言式测试（Windows / PowerShell）。与 CI 的 `cargo test` 互补：
-CI 跑单元测试；这里跑**端到端功能覆盖**和**性能覆盖**，全绿才打版本标签。
+**English** | [中文](README.zh.md)
 
-| 脚本 | 覆盖 |
-|------|------|
-| `functest.ps1` | 全部 16 个子命令的端到端断言：无损（像素 SHA256）、EXIF/XMP/IPTC 并存、sidecar（含 RAW）、`--where` 单条件与 `&&`/`||`、通配符、BMP 友好跳过、completions、verify，以及 `F-01`…`F-18` 一组针对审计发现的回归断言（共 93 条断言） |
-| `perftest.ps1` | 500 张批量：顺序 vs 并行吞吐与加速比、高负载下的正确性、无残留临时文件 |
+Two assertion-based suites run before a release (Windows / PowerShell). They complement CI's `cargo test`:
+`cargo test` covers the unit tests; these cover **end-to-end behaviour** and **performance**, and a version tag is only cut when both are green.
 
-`functest.ps1` 已接入 CI（`.github/workflows/ci.yml` 的 `e2e` job，`windows-latest`），
-是 `commands.rs` 编排层唯一的自动化回归保护。`perftest.ps1` 因为对机器负载敏感，仍然只在本地手动跑。
+| Script | Coverage |
+|--------|----------|
+| `functest.ps1` | End-to-end assertions across all 16 subcommands: losslessness (pixel SHA256), EXIF/XMP/IPTC side by side, sidecars (RAW included), `--where` single conditions and `&&`/`\|\|`, wildcards, the friendly BMP skip, completions, verify, plus a set of regression assertions named after the audit findings (F-01…F-10, F-12, F-13, F-15, F-18). 103 assertions in total |
+| `perftest.ps1` | 500-file batch: sequential vs parallel throughput and speedup, correctness under load, no leftover temporary files. 4 assertions in total |
 
-## 运行
+`functest.ps1` runs in CI (the `e2e` job in `.github/workflows/ci.yml`, on `windows-latest`)
+and is the only automated regression protection the `commands.rs` orchestration layer has. `perftest.ps1` is sensitive to machine load, so it is still run by hand locally.
 
-前置：Windows + .NET（`System.Drawing`，用于生成测试图），并已构建 release 二进制。
+## Running them
+
+Prerequisites: Windows plus .NET (`System.Drawing`, used to generate test images), and a release binary already built.
 
 ```powershell
-cargo build --release          # 在仓库根目录
-.\tests\functest.ps1           # 期望：功能测试 N/N 通过，退出码 0
-.\tests\perftest.ps1           # 期望：性能测试 4/4 通过，退出码 0
+cargo build --release          # from the repository root
+.\tests\functest.ps1           # expected: functional tests 103/103, exit code 0
+.\tests\perftest.ps1           # expected: performance tests 4/4, exit code 0
 ```
 
-如果报 `无法加载文件……在此系统上禁止运行脚本`，那是机器的执行策略拦下的，与测试本身无关。
-绕开它而不改全局设置：
+If you see `无法加载文件……在此系统上禁止运行脚本`, that is the machine's execution policy, not the tests.
+To work around it without changing a global setting:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\functest.ps1
 ```
 
-- 二进制路径按 `..\target\release\pic-killer.exe`（相对本目录）解析；测试用的临时图片写在
-  `%TEMP%\pic-killer-functest` / `%TEMP%\pic-killer-perftest`，不污染仓库。
-- 脚本以 **UTF-8 BOM** 保存：Windows PowerShell 5.1 读无 BOM 的 `.ps1` 会按 GBK 解码导致中文乱码，
-  编辑后请保持 BOM。
-- 有断言失败时退出码非零，可直接用于发版门禁。
+- The binary path resolves to `..\target\release\pic-killer.exe`, relative to this directory; temporary test
+  images are written to `%TEMP%\pic-killer-functest` / `%TEMP%\pic-killer-perftest` and never pollute the repository.
+- The scripts are stored with a **UTF-8 BOM**: Windows PowerShell 5.1 decodes a BOM-less `.ps1` as GBK, which
+  mangles the Chinese text. Keep the BOM when editing.
+- A failed assertion exits non-zero, so the scripts can be used as a release gate directly.

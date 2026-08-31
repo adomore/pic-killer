@@ -1,6 +1,6 @@
 //! `--where` 条件筛选：按元数据条件过滤要处理的文件。
 //!
-//! 支持单个条件（暂不支持 AND/OR 组合）：
+//! 支持单个条件，也支持用 `&&` 或 `||` 组合多个条件（两者不可混用，混用会报错）：
 //! - 存在性：`has-gps` / `no-gps`、`has-date` / `no-date`、`has-xmp` / `no-xmp`
 //! - 标签存在：`has:NAME` / `no:NAME`（NAME 大小写不敏感、子串匹配，覆盖 EXIF/XMP/IPTC）
 //! - 标签比较：`NAME=VALUE`、`NAME!=VALUE`、`NAME~VALUE`（含）、`NAME!~VALUE`（不含）

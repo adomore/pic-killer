@@ -10,12 +10,15 @@
 
 | 文档 | English | 中文 | 是什么 |
 |------|---------|------|--------|
+| 项目 README | [README.en.md](../README.en.md) | [README.md](../README.md) | 项目门面与快速导览 |
 | 新手入门手册 | [GETTING-STARTED.md](GETTING-STARTED.md) | [GETTING-STARTED.zh.md](GETTING-STARTED.zh.md) | 20 分钟入门：安装、安全网、五个真实任务 |
 | 用户手册 | [USER-MANUAL.md](USER-MANUAL.md) | [USER-MANUAL.zh.md](USER-MANUAL.zh.md) | 完整参考：16 个命令、每个选项、字段表、格式支持 |
 | 审计报告 | [AUDIT.md](AUDIT.md) | [AUDIT.zh.md](AUDIT.zh.md) | 工程审计：架构、发现、安全性、测试覆盖 |
 | 功能预研 | [FEATURE-RESEARCH.md](FEATURE-RESEARCH.md) | [FEATURE-RESEARCH.zh.md](FEATURE-RESEARCH.zh.md) | 竞品定位、能力差距、候选功能 |
+| 更新日志 | [CHANGELOG.md](../CHANGELOG.md) | [CHANGELOG.zh.md](../CHANGELOG.zh.md) | 每个版本改了什么，以及为什么 |
+| 发版门禁测试 | [tests/README.md](../tests/README.md) | [tests/README.zh.md](../tests/README.zh.md) | 两套 PowerShell 脚本覆盖什么、怎么跑 |
 
-仓库根目录的 [README](../README.md) 仍是项目门面与快速导览。
+只有一个命名例外：仓库 README 把中文留在 `README.md`，因为那是 GitHub 作为门面展示的文件，英文放 `README.en.md`。其余每一对都遵循「英文 `X.md`、中文 `X.zh.md`」。
 
 ---
 
@@ -42,4 +45,4 @@
 - **命令不翻译。** 只翻译叙述文字。命令行、字段名、输出样例与 CSV 内容在两版中完全一致。
 - **写实际行为。** 所有内容都对着源码和实际运行的二进制核对过。工具行为反直觉时，文档如实记录，而不是描述它「本该」怎样。
 - **示例用 PowerShell 风格路径**（`.\photos`）。Linux 与 macOS 上写成 `./photos`。
-- **镜像关系由机器校验。** `bash docs/check-parity.sh --all` 会比对每一对文档的标题树、章节编号、表格行数、代码块与提示块，发现漂移即以非零码退出。改完任何一份文档都请跑一遍。
+- **镜像关系由机器校验。** `bash docs/check-parity.sh --all` 会比对每一对文档的标题树、章节编号、表格行数、代码块与提示块，发现漂移即以非零码退出。改完任何一份文档都请跑一遍；CI 的 `docs` 作业在每次推送与 PR 上都会执行它，漂移会直接把构建拦红，而不是等人发现。
