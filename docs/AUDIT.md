@@ -29,7 +29,7 @@ The release gate was run in full and **passes completely**:
 
 Everything below was found in a codebase where all six of those gates are green. That is the central point of this report: the gates do not cover what breaks.
 
-**Remediation.** The findings were then fixed. Each fix was verified by reproducing the original failure against the rebuilt binary and confirming it no longer occurs, and each is covered by a regression assertion named after its finding ID. The end-to-end suite grew from 59 to 103 assertions and now runs in CI on `windows-latest`; unit tests grew from 51 to 73, the new ones concentrated in `commands.rs`, which previously had five. Findings carry a **Status** line below; the description of each finding is left as it was written, so this document remains a record of what was found rather than a description of the current code.
+**Remediation.** The findings were then fixed. Each fix was verified by reproducing the original failure against the rebuilt binary and confirming it no longer occurs. Most are covered by a regression assertion named after the finding ID — F-01 through F-10, F-12, F-13, F-15 and F-18; the remainder (F-11, F-14, F-16, F-19, F-20) are covered by assertions carrying their own descriptive names or by unit tests, not by an ID-named one. The end-to-end suite grew from 59 to 103 assertions and now runs in CI on `windows-latest`; unit tests grew from 51 to 73, the new ones concentrated in `commands.rs`, which previously had five. Findings carry a **Status** line below; the description of each finding is left as it was written, so this document remains a record of what was found rather than a description of the current code.
 
 ---
 
@@ -47,11 +47,13 @@ None of these are exotic edge cases. All three sit on the tool's main advertised
 
 Grade as audited: **B−.** The code was better than the product.
 
-**After remediation: A−.** Every critical and high finding, plus the three panics and the vacuous assertion, has been fixed and covered by a regression assertion. `strip` now clears all three metadata systems in one atomic write; `--where` refuses both the mixed-operator and unknown-tag-name traps instead of silently widening; `show --csv --for-apply` makes the documented round trip real; sidecar collisions are refused and sidecar writes are atomic; `verify` distinguishes absent metadata from corrupt metadata. Every medium finding has since been closed as well, except the I/O-sharing half of F-17. What still holds the grade below A: `commands.rs` remains 41% of production code, and although it went from five unit tests to twenty-two, those cover its pure helpers rather than the command bodies themselves, which are still exercised only end to end.
+**After remediation: A−.** Every critical and high finding, plus the three panics and the vacuous assertion, has been fixed and covered by a regression assertion. `strip` now clears all three metadata systems in one atomic write; `--where` refuses both the mixed-operator and unknown-tag-name traps instead of silently widening; `show --csv --for-apply` makes the documented round trip real; sidecar collisions are refused and sidecar writes are atomic; `verify` distinguishes absent metadata from corrupt metadata. Every medium finding has since been closed as well, F-17 included. What still holds the grade below A: `commands.rs` remains 43% of production code, and although it went from five unit tests to twenty-two, those cover its pure helpers rather than the command bodies themselves, which are still exercised only end to end.
 
 ---
 
 ## 3. Project metrics
+
+Every figure in this table was measured at the audited commit `e30adbf`, before the remediation described in §1. Current figures follow the table.
 
 | Metric | Value |
 |--------|-------|
@@ -67,6 +69,8 @@ Grade as audited: **B−.** The code was better than the product.
 | Test-to-production ratio | 18.3% overall; 1.8% for `commands.rs` |
 
 Measured throughput, 500 JPEGs on a 24-core machine: sequential 1,111 ms, parallel 519 ms, `-j 4` 399 ms, `report` scan 238 ms.
+
+After remediation the same measurements read: 6,427 lines of production code, 1,054 lines of unit test code across 73 tests, 471 lines of end-to-end script carrying 107 assertions, and 4,649 lines of documentation. The test-to-production ratio is 23.7% overall and 9.6% for `commands.rs`, which is now 43% of production code.
 
 ---
 
@@ -95,7 +99,7 @@ Sixty-two documentation and script inconsistencies were identified against 191 i
 | `README.md:371` | `gps.clear` clears GPS via CSV | Field normalisation strips `-`, `_` and space but not `.`; only `gpsclear`, `cleargps`, `gps-clear`, `gps_clear` work. See F-07 |
 | `README.md:193-197` | `strip` clears all metadata for privacy | Clears EXIF only. See F-01 |
 | `README.md:100-101` | `&&` and `||` combine conditions | True separately, but mixing them misparses silently rather than erroring. See F-03 |
-| `README.md:61` | Requires Rust 1.88+ | Edition 2024 requires 1.85+; the stated floor is higher than the real one |
+| `README.md:61` | Requires Rust 1.88+ | Recorded here as a defect on the reasoning that edition 2024 needs only 1.85+. **That reasoning was wrong** — the code uses let-chains, stabilised in 1.88, and 1.87 rejects it with E0658. The README was correct; `rust-version = "1.88"` and an `msrv` CI job now hold the number |
 | `README.md:14`, `:75`, `:428` | Supported formats include TIFF and WebP | True for EXIF; XMP is JPEG and PNG only, yet `--ext` defaults include `tif,tiff,webp`, so a first `xmp` run on a TIFF folder returns nothing but skips |
 | `README.md:50` | Five download rows | `release.yml` builds six targets; the musl static build is mentioned only parenthetically |
 | `tests/functest.ps1:1` | "covers 14 commands" | Covers all 16 |
@@ -243,7 +247,7 @@ Medium severity:
 | F-19 | The `iptc --clear` end-to-end assertion is vacuous: `^\s+Title` without `(?m)` can never match a multi-line string whose first line is `=== path ===` — reproduced; the assertion passes even if `--clear` does nothing | `tests/functest.ps1:118` |
 | F-20 | Sidecar mode ignores `--backup`, and `--sidecar --clear` hard-deletes with no recovery path | `src/commands.rs:1121` |
 
-**Every medium finding is now fixed except half of F-17.** `apply` composes all three metadata systems into one buffer and commits once, so a failure in a later system can no longer leave an earlier one already on disk (F-10). An unrecognised short name after `xmp:` is rejected with the valid names rather than written as `dc:<name>` (F-12). A named path that does not exist aborts the run before anything is touched, instead of being dropped silently with exit 0 (F-13). XMP qualified names are validated as NCNames before being interpolated into the packet (F-15). A GPS rational with denominator 0 no longer escapes as `NaN` into the JSON document — `read_gps` rejects non-finite values and `verify` reports the file as corrupt via a new `has_gps_tags` probe (F-16). File ordering is now natural rather than byte-lexicographic, so `--sequential` numbers `IMG_2` before `IMG_10` (F-18). Empty result sets emit `[]` or a bare header with the notice on stderr (F-09); multi-value separators are consistent across export and import (F-11); the misleading `apply` error points at the `xmp:`/`iptc:` prefixes (F-14); the vacuous assertion gained its `(?m)` flag (F-19); sidecar mode honours `--backup` and writes atomically (F-20).
+**Every medium finding is now fixed, F-17 included** — its own status paragraph follows §7. `apply` composes all three metadata systems into one buffer and commits once, so a failure in a later system can no longer leave an earlier one already on disk (F-10). An unrecognised short name after `xmp:` is rejected with the valid names rather than written as `dc:<name>` (F-12). A named path that does not exist aborts the run before anything is touched, instead of being dropped silently with exit 0 (F-13). XMP qualified names are validated as NCNames before being interpolated into the packet (F-15). A GPS rational with denominator 0 no longer escapes as `NaN` into the JSON document — `read_gps` rejects non-finite values and `verify` reports the file as corrupt via a new `has_gps_tags` probe (F-16). File ordering is now natural rather than byte-lexicographic, so `--sequential` numbers `IMG_2` before `IMG_10` (F-18). Empty result sets emit `[]` or a bare header with the notice on stderr (F-09); multi-value separators are consistent across export and import (F-11); the misleading `apply` error points at the `xmp:`/`iptc:` prefixes (F-14); the vacuous assertion gained its `(?m)` flag (F-19); sidecar mode honours `--backup` and writes atomically (F-20).
 
 **F-17 is now fully fixed.** `--where` reads each candidate file once into a `FileFacts` value that every condition in the expression shares, so a two-condition expression no longer loads the file twice; the filter also runs in parallel, and the unknown-tag-name guard piggybacks on the same pass instead of costing an extra scan. Measured on 400 JPEGs with a warm cache and conditions chosen to match zero files (so the timing contains only the filter): 1 condition 77 ms, 2 conditions 97 ms, 3 conditions 107 ms, 4 conditions 94 ms — flat in the number of conditions, where it previously scaled with it.
 
@@ -285,7 +289,7 @@ The blind spots are structural, and every one of F-01 through F-07 sits in one:
 
 Coverage by module is inversely proportional to module size: `namedate.rs` has more test code than production code; `commands.rs`, at 41% of the codebase, has 1.8%.
 
-**After remediation.** The end-to-end suite is 103 assertions and runs in CI on `windows-latest`, so `commands.rs` has automated regression protection for the first time. Every fixed finding gained an assertion named after its ID, and the fixture weakness that let F-01 survive was addressed directly: the new `strip` test populates EXIF, XMP and IPTC and then checks the raw bytes, not just the tag view. The command-to-command round trip is now tested (F-04), and `--where` selection semantics are tested rather than only its parser (F-02, F-03).
+**After remediation.** The end-to-end suite is 103 assertions and runs in CI on `windows-latest`, so `commands.rs` has automated regression protection for the first time. Most fixed findings gained an assertion named after their ID — the exceptions are listed in §1 — and the fixture weakness that let F-01 survive was addressed directly: the new `strip` test populates EXIF, XMP and IPTC and then checks the raw bytes, not just the tag view. The command-to-command round trip is now tested (F-04), and `--where` selection semantics are tested rather than only its parser (F-02, F-03).
 
 Unit tests went from 51 to 73. `commands.rs` went from five to twenty-two, covering the pure helpers the audit named: field-name normalisation, the `apply` field vocabulary, XMP short-name resolution, timezone parsing, rename pattern validation and target naming, sidecar collision detection, and the CSV/JSON escapers. Two of those tests failed on first run and both were real: `parse_tz` accepted `++08` because Rust's integer parser tolerates a leading sign, and `filter_props` depended on every caller pre-lowercasing the keyword — an implicit contract whose failure mode is silently showing fewer rows. Both were fixed.
 
@@ -300,7 +304,7 @@ Gaps, in priority order:
 | Gap | Consequence |
 |-----|-------------|
 | ~~The end-to-end suite is not in CI~~ — **fixed**, an `e2e` job on `windows-latest` builds release and runs `functest.ps1` | The largest module had no automated regression protection |
-| No `rust-version` in `Cargo.toml` | The minimum supported Rust version is unenforced, and the README's claimed 1.88+ is wrong — edition 2024 needs 1.85+ |
+| ~~No `rust-version` in `Cargo.toml`~~ — **fixed**, `rust-version = "1.88"` plus an `msrv` job compiling against exactly that version | The minimum supported Rust version was unenforced. The audit additionally judged the README's 1.88+ to be wrong; that judgement was itself wrong, because let-chains need 1.88 |
 | No `CHANGELOG` | Five releases with only auto-generated notes |
 | No `dependabot.yml` | 86 transitive dependencies with no automated update path |
 | No security policy or issue templates | `.github/` contains only the two workflows |
@@ -326,7 +330,7 @@ Adding a `windows-latest` job that runs `tests/functest.ps1` is the single highe
 | 10 | Add `rust-version`, a `CHANGELOG`, and `dependabot.yml` | Small | Standard hygiene for a v1.0.0 with published binaries |
 | 11 | Parallelise read-only commands; cache file reads across `--where` conditions (F-17) | Medium | Speed is an explicit positioning claim that currently holds only for writes |
 
-**Status: every recommendation in this table is now done.** An earlier draft of this section claimed that items 1, 2, 3, 5, 7, 8 and 9 closed every critical and high finding; that was wrong, because F-04 is a high finding addressed by item 4, which was therefore done as well. Item 6 is now complete: `commands.rs` gained seventeen unit tests covering its pure helpers, and two of them found real defects on the first run. Item 10 landed only partially — `rust-version` was added to `Cargo.toml`, but there is still no `CHANGELOG` and no `dependabot.yml`. Item 11 (sharing one file read across `--where` conditions) landed as well, and `CHANGELOG.md` / `dependabot.yml` closed the rest of item 10. Most of the low-severity list at the end of §6 has since been addressed too; what remains there is documented rather than fixed.
+**Status: every recommendation in this table is now done, except one half of item 11.** An earlier draft of this section claimed that items 1, 2, 3, 5, 7, 8 and 9 closed every critical and high finding; that was wrong, because F-04 is a high finding addressed by item 4, which was therefore done as well. Item 6 is now complete: `commands.rs` gained seventeen unit tests covering its pure helpers, and two of them found real defects on the first run. Item 10 landed only partially at first — `rust-version` was added to `Cargo.toml`, and `CHANGELOG.md` / `dependabot.yml` closed the rest of it later. Item 11 landed as far as F-17 goes: `--where` shares one file read across all conditions and filters in parallel. The other half of item 11 is still open — `show`, `report` and `verify` remain single-threaded, so `par_iter` appears only on the filter and the write batch. Most of the low-severity list at the end of §6 has since been addressed too; what remains there is documented rather than fixed.
 
 ---
 
@@ -347,4 +351,4 @@ Adding a `windows-latest` job that runs `tests/functest.ps1` is the single highe
 | F-09, F-11, F-12, F-13, F-19 | Reproduced individually against the release binary |
 | Findings not marked *reproduced* | Source reading plus independent adversarial review; three candidate findings were refuted and dropped |
 | Line counts and metrics | Direct measurement, splitting each source file at its `#[cfg(test)]` boundary |
-| Each fix | The probe that originally produced the failure was re-run against the rebuilt release binary and had to produce the corrected behaviour, then encoded as an end-to-end assertion. `cargo test`, `fmt`, `clippy -D warnings`, `functest.ps1` (83/83) and `perftest.ps1` (4/4) were all re-run green afterwards |
+| Each fix | The probe that originally produced the failure was re-run against the rebuilt release binary and had to produce the corrected behaviour, then encoded as an end-to-end assertion. `cargo test` (73/73), `fmt`, `clippy -D warnings`, `functest.ps1` (103/103) and `perftest.ps1` (4/4) were all re-run green afterwards |

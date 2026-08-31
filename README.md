@@ -5,6 +5,8 @@
 [![Downloads](https://img.shields.io/github/downloads/adomore/pic-killer/total?logo=github)](https://github.com/adomore/pic-killer/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+[English](README.en.md) | **中文**
+
 **照片元数据瑞士军刀** —— 用 Rust 实现的命令行工具。
 
 无损批量修改照片的 EXIF 元数据：拍摄时间、作者版权、相机镜头、GPS 定位、方向，以及查看与清除。

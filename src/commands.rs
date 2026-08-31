@@ -2104,7 +2104,9 @@ fn resolve_xmp_field(name: &str, value: &str) -> Result<(String, XmpValue)> {
         // `dc:ttile` 属性——用户以为改了标题，其实往包里加了个垃圾属性。
         // 现在直接拒绝；真要写自定义属性，用完整限定名 `xmp:dc:xyz`。
         other => bail!(
-            "未知的 XMP 字段 `{other}`。可用简称：title、description、creator、rights、             rating、label、keywords、city、country；             要写其它属性请用完整限定名，如 `xmp:dc:{other}` 或 `xmp:photoshop:{other}`"
+            "未知的 XMP 字段 `{other}`。可用简称：title、description、creator、rights、\
+             rating、label、keywords、city、country；\
+             要写其它属性请用完整限定名，如 `xmp:dc:{other}` 或 `xmp:photoshop:{other}`"
         ),
     })
 }

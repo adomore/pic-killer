@@ -15,11 +15,16 @@ if [ "$1" = "--all" ]; then
     bash "$0" "$here/$base.md" "$here/$base.zh.md" || rc=1
     echo
   done
-  # 仓库根目录的双语对也要守同一条铁律
-  for base in CHANGELOG; do
+  # 仓库根目录与 tests/ 下的双语对也要守同一条铁律。
+  for base in CHANGELOG tests/README; do
     bash "$0" "$root/$base.md" "$root/$base.zh.md" || rc=1
     echo
   done
+  # 根 README 是唯一的命名例外：项目门面刻意把中文留在 README.md（GitHub 首页），
+  # 英文放 README.en.md。它一度既没有英文版也不在这份清单里，于是没有任何东西
+  # 会发现门面本身破了铁律。
+  bash "$0" "$root/README.en.md" "$root/README.md" || rc=1
+  echo
   if [ $rc = 0 ]; then echo "ALL PAIRS IN LOCKSTEP"; else echo "DRIFT DETECTED"; fi
   exit $rc
 fi
@@ -73,8 +78,14 @@ blk() { awk '/^```/{f=!f; if(f){n=0; next} else {printf "%d,", n; next}} f{n++}'
 report "code block sizes" "$(blk "$en")" "$(blk "$zh")"
 
 # --- executable content inside code blocks must be identical -----------
-# (strip full-line comments starting with # , which are allowed to differ)
-code() { awk '/^```/{f=!f; next} f' "$1" | grep -v '^[[:space:]]*#' | sed 's/[[:space:]]*$//'; }
+# 注释是散文，可以翻译；命令不能。因此整行注释直接丢掉，行尾注释（` # …`）也一并
+# 截掉——它同样不是可执行内容。截断只认「空白 + #」，命令本身没有裸 # 的写法。
+code() {
+  awk '/^```/{f=!f; next} f' "$1" |
+    grep -v '^[[:space:]]*#' |
+    sed 's/[[:space:]]\{1,\}#.*$//' |
+    sed 's/[[:space:]]*$//'
+}
 if diff -q <(code "$en") <(code "$zh") >/dev/null 2>&1; then
   printf '  [ok]    %-26s identical\n' "code block content"
 else

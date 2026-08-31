@@ -1,0 +1,37 @@
+# 发版门禁测试脚本
+
+[English](README.md) | **中文**
+
+发布前跑的两套断言式测试（Windows / PowerShell）。与 CI 的 `cargo test` 互补：
+`cargo test` 跑单元测试；这里跑**端到端功能覆盖**和**性能覆盖**，全绿才打版本标签。
+
+| 脚本 | 覆盖 |
+|------|------|
+| `functest.ps1` | 全部 16 个子命令的端到端断言：无损（像素 SHA256）、EXIF/XMP/IPTC 并存、sidecar（含 RAW）、`--where` 单条件与 `&&`/`\|\|`、通配符、BMP 友好跳过、completions、verify，以及一组针对审计发现的回归断言，以编号命名（F-01…F-10、F-12、F-13、F-15、F-18）。共 103 条断言 |
+| `perftest.ps1` | 500 张批量：顺序 vs 并行吞吐与加速比、高负载下的正确性、无残留临时文件。共 4 条断言 |
+
+`functest.ps1` 已接入 CI（`.github/workflows/ci.yml` 的 `e2e` job，`windows-latest`），
+是 `commands.rs` 编排层唯一的自动化回归保护。`perftest.ps1` 因为对机器负载敏感，仍然只在本地手动跑。
+
+## 运行
+
+前置：Windows + .NET（`System.Drawing`，用于生成测试图），并已构建 release 二进制。
+
+```powershell
+cargo build --release          # 在仓库根目录
+.\tests\functest.ps1           # 期望：功能测试 103/103 通过，退出码 0
+.\tests\perftest.ps1           # 期望：性能测试 4/4 通过，退出码 0
+```
+
+如果报 `无法加载文件……在此系统上禁止运行脚本`，那是机器的执行策略拦下的，与测试本身无关。
+绕开它而不改全局设置：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\functest.ps1
+```
+
+- 二进制路径按 `..\target\release\pic-killer.exe`（相对本目录）解析；测试用的临时图片写在
+  `%TEMP%\pic-killer-functest` / `%TEMP%\pic-killer-perftest`，不污染仓库。
+- 脚本以 **UTF-8 BOM** 保存：Windows PowerShell 5.1 读无 BOM 的 `.ps1` 会按 GBK 解码导致中文乱码，
+  编辑后请保持 BOM。
+- 有断言失败时退出码非零，可直接用于发版门禁。

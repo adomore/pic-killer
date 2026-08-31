@@ -14,6 +14,8 @@ Feasibility judgements here are constrained by one fact that shapes almost every
 
 Findings referenced as F-nn are from the [Audit Report](AUDIT.md).
 
+**When this was written.** The competitive analysis, the candidate list and the roadmap below were written against the pre-remediation code, and are left as written. The audit findings they lean on — F-01, F-02, F-03, F-05 and F-17 — have since been fixed, so wherever the text says a defect exists today, read it as the reason the candidate was proposed rather than as a current bug. The capability boundary in §2 is the one part that describes the present, so it has been kept current; §7 carries a note on which phase of the roadmap has already landed.
+
 ---
 
 ## 2. Current capability boundary
@@ -30,10 +32,10 @@ What PIC-Killer does today, stated precisely enough to reason about:
 | Video | None |
 | Writable EXIF tags | A hand-maintained whitelist: 11 string tags, 14 numeric and rational tags, plus time, GPS, orientation and user comment |
 | Batch selection | Paths, directories, recursion, extension filter, internal wildcard expansion, metadata filter |
-| Parallelism | Write commands only; read-only commands are sequential |
+| Parallelism | Write commands and the `--where` filter; `show`, `report` and `verify` are still sequential |
 | Safety | Dry-run, backup, confirmation prompt, atomic replace, timestamp preservation |
 | Automation | Exit codes, JSON and CSV export, shell completion, man page |
-| Language | Chinese only, in both the interface and the documentation |
+| Language | Interface Chinese only; the documentation set is mirrored English and Chinese |
 
 Three of those lines are the strategically important ones: the whitelist of roughly 25 writable tags, the absence of RAW and video, and Chinese-only output.
 
@@ -156,6 +158,8 @@ The work is a new CLI surface — something like `--set-tag "EXIF:0x9291:STRING=
 **Later, if demand appears.** Candidates 13 through 17. All defensible, none urgent.
 
 **Only with a real reason.** Candidates 18 and 19. MakerNote preservation is high value but its root cause is upstream, and video is a different problem domain wearing a similar hat.
+
+**Landed since this was written.** The whole "Now" phase is done — candidates 1, 2 and the collision half of 4 shipped with the audit remediation. From "Next", candidate 6 is done (the end-to-end suite runs in CI) and candidate 5 is half done: `--where` reads each file once and filters in parallel, but `show`, `report` and `verify` are still sequential. Candidate 3's guardrails and the remaining phases are untouched.
 
 ---
 

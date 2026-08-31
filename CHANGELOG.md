@@ -66,6 +66,8 @@ broken while all six release gates passed. Everything below closes those finding
   structurally mirrored EN/ZH pairs, with `check-parity.sh` enforcing the lockstep.
 - `rust-version = "1.88"` in `Cargo.toml`, enforced by a CI job that compiles against exactly that version. An earlier commit in this cycle set it to 1.85 on the reasoning that edition 2024 requires 1.85; that was wrong — the code uses let-chains, stabilised in 1.88, and 1.87 rejects it with E0658.
 - Dependabot configuration for Cargo and GitHub Actions.
+- `README.en.md` — an English edition of the repository front page, structurally mirrored against the Chinese `README.md`, which stays at that filename because it is what GitHub shows. `tests/README.md` gained an English edition the same way, and `check-parity.sh --all` now covers both pairs.
+- A `docs` job in CI running `check-parity.sh --all`, so EN/ZH drift fails the build. The lockstep had been enforced only by remembering to run the script by hand, which is how the audit report ended up contradicting itself in three places.
 
 ### Changed
 
@@ -74,6 +76,8 @@ broken while all six release gates passed. Everything below closes those finding
 - `actions/checkout` v4 → v7 across both workflows, clearing the Node 20 deprecation warning that appeared on every job. A byte-level diff of the two `action.yml` files shows a single differing line (`using: node20` → `node24`); every input is identical.
 - Release actions bumped and validated with a real pre-release run: `upload-artifact` v4 → v7, `download-artifact` v4 → v8, `action-gh-release` v2 → v3. A tag containing a hyphen is now published as a pre-release.
 - Tests: 51 → 73 unit tests, 59 → 103 end-to-end assertions.
+- Documentation corrected against the code it describes. The audit report had stated F-17 as half-open in two places and fully fixed in a third, kept a Rust-version finding whose reasoning had since been disproved, cited three different end-to-end assertion counts, and presented its as-audited metrics as if current. The feature research still described the pre-remediation code throughout and now says so. The user manual listed an error message the binary no longer emits.
+- `check-parity.sh` also strips trailing `# …` comments before comparing code blocks, so a comment may be translated while the command itself still has to match byte for byte.
 
 ### Security
 
